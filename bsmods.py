@@ -15,11 +15,12 @@ import sys
 import tempfile
 import webbrowser
 
-from PyQt6.QtCore import Qt, QSize, QUrl
-from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPalette, QPixmap
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-                             QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtCore import QPropertyAnimation, QRectF, Qt, QTimer, QUrl, pyqtProperty
+from PyQt6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter,
+                         QPainterPath, QPalette, QPen, QPixmap)
+from PyQt6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QFileDialog, QFrame,
+                             QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
+                             QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
 APP_ID = 629730
 HOME = os.path.expanduser("~")
@@ -27,6 +28,7 @@ DATA = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.join(HOME, ".local/s
 CONF = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(HOME, ".config")), "bsmods", "config.json")
 DISABLED = os.path.join(DATA, "disabled")
 NEXUS = "https://www.nexusmods.com/bladeandsorcery/mods/"
+ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bsmods.svg")
 ARCHIVES = ("*.zip", "*.7z", "*.rar", "*.tar", "*.tar.gz", "*.tgz", "*.tar.xz")
 STEAM_ROOTS = [os.path.join(HOME, ".local/share/Steam"), os.path.join(HOME, ".steam/steam"),
                os.path.join(HOME, ".var/app/com.valvesoftware.Steam/.local/share/Steam")]
@@ -169,170 +171,499 @@ def human(n):
 
 # ---- window -------------------------------------------------------------------------------------
 
-class ModRow(QWidget):
+ACCENT = "#c9a96e"
+STYLE = f"""
+QMainWindow, #root {{ background: #121216; }}
+QLabel {{ color: #e8e8ef; }}
+QLabel#muted {{ color: #8a8a99; }}
+QLabel#title {{ font-size: 22px; font-weight: 700; }}
+QLabel#chipOk {{ background: rgba(120,200,140,0.14); color: #8fd6a2; border-radius: 9px; padding: 3px 10px; font-size: 11px; }}
+QLabel#chipBad {{ background: rgba(224,108,117,0.16); color: #e88b93; border-radius: 9px; padding: 3px 10px; font-size: 11px; }}
+QLabel#badge {{ background: #2a2a33; color: #c8c8d4; border-radius: 7px; padding: 2px 8px; font-size: 11px; }}
+QLabel#badgeOld {{ background: rgba(224,108,117,0.18); color: #e88b93; border-radius: 7px; padding: 2px 8px; font-size: 11px; }}
+QLabel#badgeOk {{ background: rgba(120,200,140,0.14); color: #8fd6a2; border-radius: 7px; padding: 2px 8px; font-size: 11px; }}
+QPushButton {{ background: #24242c; color: #e8e8ef; border: 1px solid #30303a; border-radius: 9px; padding: 8px 14px; }}
+QPushButton:hover {{ background: #2c2c36; }}
+QPushButton#primary {{ background: {ACCENT}; color: #17171c; border: none; font-weight: 700; }}
+QPushButton#primary:hover {{ background: #d6b77d; }}
+QPushButton#seg {{ border-radius: 8px; padding: 6px 14px; background: transparent; border: 1px solid transparent; color: #a0a0ad; }}
+QPushButton#seg:checked {{ background: #2a2a33; color: #e8e8ef; border: 1px solid #36363f; }}
+QToolButton {{ background: transparent; color: #a0a0ad; border: none; border-radius: 8px; padding: 4px 8px; font-size: 16px; }}
+QToolButton:hover {{ background: #2a2a33; color: #e8e8ef; }}
+QToolButton::menu-indicator {{ image: none; }}
+QLineEdit {{ background: #1c1c22; color: #e8e8ef; border: 1px solid #2a2a33; border-radius: 10px; padding: 8px 12px; }}
+QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
+QFrame#card {{ background: #1b1b21; border: 1px solid #26262e; border-radius: 14px; }}
+QFrame#card:hover {{ background: #202027; border: 1px solid #30303a; }}
+QFrame#segbox {{ background: #1c1c22; border: 1px solid #2a2a33; border-radius: 10px; }}
+QScrollArea {{ background: transparent; border: none; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+QScrollBar::handle:vertical {{ background: #2e2e38; border-radius: 4px; min-height: 30px; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QMenu {{ background: #1f1f26; color: #e8e8ef; border: 1px solid #30303a; border-radius: 10px; padding: 6px; }}
+QMenu::item {{ padding: 7px 18px; border-radius: 6px; }}
+QMenu::item:selected {{ background: #2c2c36; }}
+"""
+
+
+class Switch(QAbstractButton):
+    """an on/off switch"""
+    def __init__(self, on=False):
+        super().__init__()
+        self.setCheckable(True)
+        self.setChecked(on)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(46, 26)
+        self._pos = 1.0 if on else 0.0
+        self.anim = QPropertyAnimation(self, b"pos", self)
+        self.anim.setDuration(140)
+        self.toggled.connect(self._animate)
+
+    def _animate(self, on):
+        self.anim.stop()
+        self.anim.setEndValue(1.0 if on else 0.0)
+        self.anim.start()
+
+    def getPos(self):
+        return self._pos
+
+    def setPos(self, v):
+        self._pos = v
+        self.update()
+
+    pos = pyqtProperty(float, getPos, setPos)
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        off, on = QColor("#3a3a45"), QColor(ACCENT)
+        track = QColor(int(off.red() + (on.red() - off.red()) * self._pos),
+                       int(off.green() + (on.green() - off.green()) * self._pos),
+                       int(off.blue() + (on.blue() - off.blue()) * self._pos))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(track)
+        p.drawRoundedRect(QRectF(0, 0, self.width(), self.height()), 13, 13)
+        p.setBrush(QColor("#ffffff") if self._pos > 0.5 else QColor("#c8c8d4"))
+        x = 3 + (self.width() - 26) * self._pos
+        p.drawEllipse(QRectF(x, 3, 20, 20))
+
+
+def rounded(pix, w, h, r=10):
+    """pix cropped to w x h with rounded corners"""
+    out = QPixmap(w, h)
+    out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, w, h), r, r)
+    p.setClipPath(path)
+    scaled = pix.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+    p.drawPixmap((w - scaled.width()) // 2, (h - scaled.height()) // 2, scaled)
+    p.end()
+    return out
+
+
+def placeholder(name, w, h):
+    """a tile with the mod's initials, for mods without a thumbnail"""
+    out = QPixmap(w, h)
+    out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    hue = sum(map(ord, name)) % 360
+    grad = QLinearGradient(0, 0, w, h)
+    grad.setColorAt(0, QColor.fromHsl(hue, 70, 70))
+    grad.setColorAt(1, QColor.fromHsl((hue + 40) % 360, 80, 40))
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, w, h), 10, 10)
+    p.fillPath(path, grad)
+    initials = "".join(w_[0] for w_ in re.findall(r"[A-Za-z0-9]+", name)[:2]).upper() or "?"
+    f = QFont()
+    f.setBold(True)
+    f.setPixelSize(int(h * 0.38))
+    p.setFont(f)
+    p.setPen(QColor(255, 255, 255, 220))
+    p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, initials)
+    p.end()
+    return out
+
+
+def label(text, name=None, wrap=False):
+    l = QLabel(text)
+    if name:
+        l.setObjectName(name)
+    l.setWordWrap(wrap)
+    return l
+
+
+class ModCard(QFrame):
     def __init__(self, win, mod):
         super().__init__()
+        self.setObjectName("card")
         self.win, self.mod = win, mod
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(12)
+        lay.setContentsMargins(12, 12, 14, 12)
+        lay.setSpacing(14)
 
-        self.check = QCheckBox()
-        self.check.setChecked(mod["enabled"])
-        self.check.setToolTip("On: the game loads it. Off: kept, but not loaded")
-        self.check.toggled.connect(self.toggled)
-        lay.addWidget(self.check)
-
+        tw, th = 128, 72
         thumb = QLabel()
-        thumb.setFixedSize(64, 40)
+        thumb.setFixedSize(tw, th)
         pix = QPixmap(os.path.join(mod["path"], mod["thumb"])) if mod["thumb"] else QPixmap()
-        if not pix.isNull():
-            thumb.setPixmap(pix.scaled(64, 40, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                       Qt.TransformationMode.SmoothTransformation))
+        thumb.setPixmap(rounded(pix, tw, th) if not pix.isNull() else placeholder(mod["name"], tw, th))
+        if not mod["enabled"]:
+            eff = QGraphicsOpacityEffect(thumb)
+            eff.setOpacity(0.4)
+            thumb.setGraphicsEffect(eff)
         lay.addWidget(thumb)
 
         text = QVBoxLayout()
-        text.setSpacing(2)
-        title = QLabel(f"<b>{mod['name']}</b>" + (f"  <span style='color:#8a8a99'>{mod['version']}</span>" if mod["version"] else ""))
-        text.addWidget(title)
-        bits = []
+        text.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        name = label(mod["name"])
+        name.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {'#e8e8ef' if mod['enabled'] else '#7a7a88'};")
+        top.addWidget(name)
+        if mod["version"]:
+            top.addWidget(label("v" + mod["version"].lstrip("vV"), "badge"))
+        top.addStretch(1)
+        text.addLayout(top)
+
+        if mod["desc"]:
+            d = label(mod["desc"].replace("\n", " "), "muted")
+            d.setMaximumWidth(10000)
+            fm = QFontMetrics(d.font())
+            d.setText(fm.elidedText(d.text(), Qt.TextElideMode.ElideRight, 520))
+            d.setToolTip(mod["desc"])
+            text.addWidget(d)
+
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
         if mod["author"]:
-            bits.append(f"by {mod['author']}")
+            chips.addWidget(label("by " + mod["author"], "muted"))
         if mod["game"]:
             old = mod["game"].startswith("0.")
-            bits.append(f"<span style='color:{'#e06c75' if old else '#8a8a99'}'>for game {mod['game']}"
-                        + (" (older game version, may not load)" if old else "") + "</span>")
-        bits.append(human(mod["size"]))
-        sub = QLabel("  ·  ".join(bits))
-        sub.setStyleSheet("color:#8a8a99")
-        text.addWidget(sub)
+            c = label(("Older game " if old else "Game ") + mod["game"], "badgeOld" if old else "badgeOk")
+            if old:
+                c.setToolTip("Made for an older Blade & Sorcery version (U11/U12): it may not load in 1.0")
+            chips.addWidget(c)
+        chips.addWidget(label(human(mod["size"]), "badge"))
+        if not mod["enabled"]:
+            chips.addWidget(label("Off", "badge"))
+        chips.addStretch(1)
+        text.addLayout(chips)
         lay.addLayout(text, 1)
 
-        rm = QPushButton("Remove")
-        rm.clicked.connect(lambda: win.remove(mod))
-        lay.addWidget(rm)
-        if mod["desc"]:
-            self.setToolTip(mod["desc"])
+        sw = Switch(mod["enabled"])
+        sw.setToolTip("On: the game loads it. Off: kept, but the game doesn't see it")
+        sw.toggled.connect(lambda on: win.toggle(mod, on))
+        lay.addWidget(sw, 0, Qt.AlignmentFlag.AlignVCenter)
 
-    def toggled(self, on):
-        self.win.toggle(self.mod, on)
+        more = QToolButton()
+        more.setText("⋯")
+        more.setCursor(Qt.CursorShape.PointingHandCursor)
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("Open its folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(mod["path"])))
+        menu.addSeparator()
+        menu.addAction("Remove...", lambda: win.remove(mod))
+        more.setMenu(menu)
+        lay.addWidget(more, 0, Qt.AlignmentFlag.AlignVCenter)
+
+
+class DropOverlay(QWidget):
+    """shown over the window while files are dragged onto it"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hide()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QColor(18, 18, 22, 210))
+        r = QRectF(self.rect()).adjusted(14, 14, -14, -14)
+        pen = QPen(QColor(ACCENT), 2, Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        p.setBrush(QColor(201, 169, 110, 26))
+        p.drawRoundedRect(r, 18, 18)
+        f = QFont()
+        f.setPixelSize(22)
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor("#e8e8ef"))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, "Drop to install\n")
+        f.setPixelSize(13)
+        f.setBold(False)
+        p.setFont(f)
+        p.setPen(QColor("#a0a0ad"))
+        p.drawText(r.adjusted(0, 40, 0, 0), Qt.AlignmentFlag.AlignCenter, ".zip, .7z or .rar from Nexus Mods")
 
 
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("BS Mods")
-        self.resize(820, 600)
+        self.resize(900, 640)
+        self.setMinimumSize(640, 420)
         self.setAcceptDrops(True)
         self.game = find_game()
+        self.show_mode = "all"
 
-        central = QWidget()
-        self.setCentralWidget(central)
-        v = QVBoxLayout(central)
-        v.setContentsMargins(14, 14, 14, 14)
-        v.setSpacing(10)
+        root = QWidget()
+        root.setObjectName("root")
+        self.setCentralWidget(root)
+        v = QVBoxLayout(root)
+        v.setContentsMargins(22, 20, 22, 14)
+        v.setSpacing(14)
 
+        # header
         head = QHBoxLayout()
-        title = QLabel("<span style='font-size:20px'><b>Blade &amp; Sorcery mods</b></span>")
-        head.addWidget(title, 1)
-        for text, fn in (("Install mods...", self.pick), ("Get mods", lambda: webbrowser.open(NEXUS)),
-                         ("Open folder", self.open_folder), ("Refresh", self.refresh)):
-            b = QPushButton(text)
-            b.clicked.connect(fn)
-            head.addWidget(b)
+        head.setSpacing(12)
+        icon = QLabel()
+        icon.setPixmap(QIcon(ICON).pixmap(44, 44) if os.path.exists(ICON) else QPixmap())
+        head.addWidget(icon)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        titles.addWidget(label("BS Mods", "title"))
+        self.subtitle = label("", "muted")
+        titles.addWidget(self.subtitle)
+        head.addLayout(titles)
+        self.chip = label("")
+        head.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addStretch(1)
+        get = QPushButton("Get mods")
+        get.setCursor(Qt.CursorShape.PointingHandCursor)
+        get.clicked.connect(lambda: webbrowser.open(NEXUS))
+        head.addWidget(get)
+        add = QPushButton("+  Install mods")
+        add.setObjectName("primary")
+        add.setCursor(Qt.CursorShape.PointingHandCursor)
+        add.clicked.connect(self.pick)
+        head.addWidget(add)
+        more = QToolButton()
+        more.setText("⋯")
+        more.setCursor(Qt.CursorShape.PointingHandCursor)
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("Open the Mods folder", self.open_folder)
+        menu.addAction("Refresh", self.refresh)
+        menu.addSeparator()
+        menu.addAction("Turn all on", lambda: self.set_all(True))
+        menu.addAction("Turn all off", lambda: self.set_all(False))
+        menu.addSeparator()
+        menu.addAction("Change game folder...", self.change_game)
+        more.setMenu(menu)
+        head.addWidget(more)
         v.addLayout(head)
 
-        self.where = QLabel()
-        self.where.setStyleSheet("color:#8a8a99")
-        self.where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        v.addWidget(self.where)
-
+        # search + filter
+        bar = QHBoxLayout()
+        bar.setSpacing(10)
         self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Search mods")
+        self.filter.setPlaceholderText("Search by name or author")
+        self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(self.refresh)
-        v.addWidget(self.filter)
+        bar.addWidget(self.filter, 1)
+        seg = QFrame()
+        seg.setObjectName("segbox")
+        sl = QHBoxLayout(seg)
+        sl.setContentsMargins(3, 3, 3, 3)
+        sl.setSpacing(2)
+        self.segs = {}
+        group = QButtonGroup(self)
+        for key, text in (("all", "All"), ("on", "On"), ("off", "Off")):
+            b = QPushButton(text)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self.set_mode(k))
+            group.addButton(b)
+            sl.addWidget(b)
+            self.segs[key] = b
+        self.segs["all"].setChecked(True)
+        bar.addWidget(seg)
+        v.addLayout(bar)
 
-        self.list = QListWidget()
-        self.list.setSpacing(2)
-        v.addWidget(self.list, 1)
+        # the mods
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.holder = QWidget()
+        # only the holder itself: a rule without a selector would reach every card and button in it
+        self.holder.setObjectName("holder")
+        self.holder.setStyleSheet("#holder { background: transparent; }")
+        self.scroll.viewport().setObjectName("viewport")
+        self.scroll.viewport().setStyleSheet("#viewport { background: transparent; }")
+        self.cards = QVBoxLayout(self.holder)
+        self.cards.setContentsMargins(0, 0, 4, 0)
+        self.cards.setSpacing(8)
+        self.scroll.setWidget(self.holder)
+        v.addWidget(self.scroll, 1)
 
-        self.status = QLabel("Drop mod archives (.zip, .7z, .rar) anywhere on this window to install them")
-        self.status.setStyleSheet("color:#8a8a99")
+        self.status = label("Tip: drop mod files anywhere on this window to install them", "muted")
         v.addWidget(self.status)
+        self.status_timer = QTimer(self)
+        self.status_timer.setSingleShot(True)
+        self.status_timer.timeout.connect(
+            lambda: self.status.setText("Tip: drop mod files anywhere on this window to install them"))
 
+        self.overlay = DropOverlay(root)
         self.refresh()
 
+    def say(self, text):
+        self.status.setText(text)
+        self.status_timer.start(6000)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.overlay.setGeometry(self.centralWidget().rect())
+
     # -- game folder --
+    def change_game(self):
+        d = QFileDialog.getExistingDirectory(self, "Blade & Sorcery folder (the one with BladeAndSorcery_Data)",
+                                             self.game or HOME)
+        if not d:
+            return False
+        if not os.path.isdir(os.path.join(d, "BladeAndSorcery_Data")):
+            QMessageBox.warning(self, "Not the game folder", "That folder has no BladeAndSorcery_Data in it.")
+            return False
+        save_game_dir(d)
+        self.game = d
+        self.refresh()
+        return True
+
     def ensure_game(self):
         if self.game:
             return True
-        QMessageBox.information(self, "Game not found",
-                                "Blade & Sorcery wasn't found in your Steam libraries. Pick the game folder "
-                                "(the one with BladeAndSorcery_Data in it).")
-        d = QFileDialog.getExistingDirectory(self, "Blade & Sorcery folder", HOME)
-        if d and os.path.isdir(os.path.join(d, "BladeAndSorcery_Data")):
-            save_game_dir(d)
-            self.game = d
-            return True
-        return False
+        QMessageBox.information(self, "Game not found", "Blade & Sorcery wasn't found in your Steam libraries. "
+                                "Pick the game folder (the one with BladeAndSorcery_Data in it).")
+        return self.change_game()
+
+    # -- list --
+    def set_mode(self, mode):
+        self.show_mode = mode
+        self.refresh()
+
+    def clear_cards(self):
+        while self.cards.count():
+            w = self.cards.takeAt(0).widget()
+            if w:
+                # gone at once: deleteLater alone left it drawn until the next event loop pass
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+
+    def empty_state(self, title, text, buttons=True):
+        box = QWidget()
+        l = QVBoxLayout(box)
+        l.setContentsMargins(0, 60, 0, 0)
+        l.setSpacing(10)
+        icon = QLabel()
+        icon.setPixmap(QIcon(ICON).pixmap(72, 72) if os.path.exists(ICON) else QPixmap())
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(icon)
+        t = label(title)
+        t.setStyleSheet("font-size: 17px; font-weight: 700;")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(t)
+        s = label(text, "muted", wrap=True)
+        s.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        l.addWidget(s)
+        if buttons:
+            row = QHBoxLayout()
+            row.addStretch(1)
+            g = QPushButton("Get mods on Nexus")
+            g.clicked.connect(lambda: webbrowser.open(NEXUS))
+            row.addWidget(g)
+            a = QPushButton("+  Install mods")
+            a.setObjectName("primary")
+            a.clicked.connect(self.pick)
+            row.addWidget(a)
+            row.addStretch(1)
+            l.addLayout(row)
+        self.cards.addWidget(box)
 
     def refresh(self):
-        self.list.clear()
+        self.clear_cards()
         if not self.game:
-            self.where.setText("Blade & Sorcery not found: use Install mods... to pick its folder")
+            self.subtitle.setText("Blade & Sorcery")
+            self.chip.setObjectName("chipBad")
+            self.chip.setText("Game not found")
+            self.chip.setStyle(self.chip.style())
+            self.empty_state("Blade & Sorcery wasn't found",
+                             "Install it in Steam, or pick its folder with ⋯ → Change game folder.", buttons=False)
+            self.cards.addStretch(1)
             return
         mods = list_mods(self.game)
         on = sum(1 for m in mods if m["enabled"])
-        self.where.setText(f"{len(mods)} mods, {on} on  ·  {mods_dir(self.game)}")
+        self.subtitle.setText(f"Blade & Sorcery  ·  {len(mods)} mod{'s' if len(mods) != 1 else ''}, {on} on")
+        self.chip.setObjectName("chipOk")
+        self.chip.setText("Game found")
+        self.chip.setToolTip(mods_dir(self.game))
+        self.chip.setStyle(self.chip.style())
         q = self.filter.text().strip().lower()
-        for m in mods:
-            if q and q not in m["name"].lower() and q not in m["author"].lower():
-                continue
-            item = QListWidgetItem()
-            row = ModRow(self, m)
-            item.setSizeHint(QSize(0, row.sizeHint().height()))
-            self.list.addItem(item)
-            self.list.setItemWidget(item, row)
+        shown = [m for m in mods
+                 if (self.show_mode == "all" or m["enabled"] == (self.show_mode == "on"))
+                 and (not q or q in m["name"].lower() or q in m["author"].lower())]
         if not mods:
-            item = QListWidgetItem("No mods yet. Download some from Nexus Mods (Get mods), then drop them here.")
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.list.addItem(item)
+            self.empty_state("No mods yet", "Download mods from Nexus Mods (use Manual download), then drop the "
+                             "files on this window or press Install mods.")
+        elif not shown:
+            self.empty_state("Nothing matches", "Try another search, or show All.", buttons=False)
+        for m in shown:
+            self.cards.addWidget(ModCard(self, m))
+        self.cards.addStretch(1)
 
     # -- actions --
     def install_paths(self, paths):
         if not paths or not self.ensure_game():
             return
         done, errors = [], []
-        for p in paths:
-            try:
-                done += install(self.game, p)
-            except (RuntimeError, OSError) as e:
-                errors.append(str(e))
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for p in paths:
+                self.say(f"Installing {os.path.basename(p)}...")
+                QApplication.processEvents()
+                try:
+                    done += install(self.game, p)
+                except (RuntimeError, OSError) as e:
+                    errors.append(str(e))
+        finally:
+            QApplication.restoreOverrideCursor()
         self.refresh()
         if done:
-            self.status.setText("Installed: " + ", ".join(done))
+            self.say("Installed " + ", ".join(done))
         if errors:
-            QMessageBox.warning(self, "Some mods weren't installed", "\n".join(errors))
+            QMessageBox.warning(self, "Some mods weren't installed", "\n\n".join(errors))
 
     def pick(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "Mod archives", os.path.join(HOME, "Downloads"),
+        paths, _ = QFileDialog.getOpenFileNames(self, "Mod files", os.path.join(HOME, "Downloads"),
                                                 "Mod archives (" + " ".join(ARCHIVES) + ");;All files (*)")
         self.install_paths(paths)
 
     def toggle(self, mod, on):
         try:
             set_enabled(self.game, mod, on)
-            self.status.setText(f"{mod['name']} is {'on' if on else 'off'}")
+            self.say(f"{mod['name']} is {'on' if on else 'off'}")
         except OSError as e:
             QMessageBox.warning(self, "Couldn't change it", str(e))
+        QTimer.singleShot(160, self.refresh)    # let the switch finish moving
+
+    def set_all(self, on):
+        if not self.ensure_game():
+            return
+        n = 0
+        for m in list_mods(self.game):
+            if m["enabled"] != on:
+                set_enabled(self.game, m, on)
+                n += 1
         self.refresh()
+        self.say(f"Turned {n} mod{'s' if n != 1 else ''} {'on' if on else 'off'}")
 
     def remove(self, mod):
         if QMessageBox.question(self, "Remove mod", f"Remove {mod['name']}? Its files are deleted.") \
                 != QMessageBox.StandardButton.Yes:
             return
         shutil.rmtree(mod["path"], ignore_errors=True)
-        self.status.setText(f"Removed {mod['name']}")
+        self.say(f"Removed {mod['name']}")
         self.refresh()
 
     def open_folder(self):
@@ -343,22 +674,30 @@ class Window(QMainWindow):
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
             e.acceptProposedAction()
+            self.overlay.setGeometry(self.centralWidget().rect())
+            self.overlay.raise_()
+            self.overlay.show()
+
+    def dragLeaveEvent(self, _e):
+        self.overlay.hide()
 
     def dropEvent(self, e):
+        self.overlay.hide()
         self.install_paths([u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile()])
 
 
 def dark(app):
     app.setStyle("Fusion")
     p = QPalette()
-    for role, c in ((QPalette.ColorRole.Window, "#17171c"), (QPalette.ColorRole.WindowText, "#e8e8ef"),
-                    (QPalette.ColorRole.Base, "#1f1f26"), (QPalette.ColorRole.AlternateBase, "#24242c"),
-                    (QPalette.ColorRole.Text, "#e8e8ef"), (QPalette.ColorRole.Button, "#2a2a33"),
-                    (QPalette.ColorRole.ButtonText, "#e8e8ef"), (QPalette.ColorRole.Highlight, "#c9a96e"),
-                    (QPalette.ColorRole.HighlightedText, "#17171c"), (QPalette.ColorRole.ToolTipBase, "#2a2a33"),
-                    (QPalette.ColorRole.ToolTipText, "#e8e8ef")):
+    for role, c in ((QPalette.ColorRole.Window, "#121216"), (QPalette.ColorRole.WindowText, "#e8e8ef"),
+                    (QPalette.ColorRole.Base, "#1c1c22"), (QPalette.ColorRole.AlternateBase, "#24242c"),
+                    (QPalette.ColorRole.Text, "#e8e8ef"), (QPalette.ColorRole.Button, "#24242c"),
+                    (QPalette.ColorRole.ButtonText, "#e8e8ef"), (QPalette.ColorRole.Highlight, ACCENT),
+                    (QPalette.ColorRole.HighlightedText, "#17171c"), (QPalette.ColorRole.ToolTipBase, "#24242c"),
+                    (QPalette.ColorRole.ToolTipText, "#e8e8ef"), (QPalette.ColorRole.PlaceholderText, "#6f6f7c")):
         p.setColor(role, QColor(c))
     app.setPalette(p)
+    app.setStyleSheet(STYLE)
 
 
 def main():
@@ -367,9 +706,8 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("bsmods")
     app.setDesktopFileName("bsmods")
-    icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bsmods.svg")
-    if os.path.exists(icon):
-        app.setWindowIcon(QIcon(icon))
+    if os.path.exists(ICON):
+        app.setWindowIcon(QIcon(ICON))
     dark(app)
     w = Window()
     w.show()

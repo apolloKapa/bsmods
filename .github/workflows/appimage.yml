@@ -1,0 +1,51 @@
+name: AppImage
+
+# Pushing a v* tag builds BS_Mods-x86_64.AppImage and attaches it to a release for that tag.
+# Running it by hand (Actions -> AppImage -> Run workflow) only uploads it as a build artifact.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # the oldest supported Ubuntu: the bundled Python and libraries then run on most distros
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv binutils libarchive-tools \
+            libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libfontconfig1
+
+      - name: Get appimagetool
+        run: |
+          wget -q -O appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+      - name: Build AppImage
+        env:
+          APPIMAGETOOL: ${{ github.workspace }}/appimagetool
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          BSMODS_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+        run: ./build_appimage.sh
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: BS_Mods-x86_64.AppImage
+          path: dist/BS_Mods-x86_64.AppImage
+
+      - name: Attach to release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "BS Mods $GITHUB_REF_NAME" --notes "Blade & Sorcery mod manager for Linux. Download BS_Mods-x86_64.AppImage, make it executable (chmod +x) and run it."
+          gh release upload "$GITHUB_REF_NAME" dist/BS_Mods-x86_64.AppImage --clobber
