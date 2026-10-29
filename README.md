@@ -10,7 +10,12 @@ like on Windows; only the Windows mod managers don't run. BS Mods does their job
   **Install mods...**; packs with several mods, and mods nested in extra folders, are handled
 - turns mods **off and on** without deleting them (off ones wait in `~/.local/share/bsmods/disabled`,
   where the game can't see them)
-- shows each mod's version, author and the game version it's for (older U11/U12 mods are flagged)
+- keeps mods on **three pages, 1.0, U12 and U11**, sorted by the game version each mod was made
+  for. Only the page in use is in the game's Mods folder; the others wait in
+  `~/.local/share/bsmods/pages`. After switching the game version in Steam (Properties → Betas),
+  open that page and press **Use this page** to swap its mods in. A mod on the wrong page can be
+  moved with its ⋯ menu
+- shows each mod's version, author and the game version it's for
 - removes mods, opens the Mods folder, and links to Nexus Mods (**Get mods**)
 
 ## Install

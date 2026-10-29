@@ -5,6 +5,11 @@ Blade & Sorcery mods are folders with a manifest.json that the game loads from
 BladeAndSorcery_Data/StreamingAssets/Mods. This finds the game in your Steam libraries,
 installs mods from downloaded archives (.zip/.7z/.rar, by button or drag and drop), turns them
 off and on (kept in ~/.local/share/bsmods/disabled while off) and removes them.
+
+Mods are kept on three pages, one per game version (1.0, U12, U11), sorted by the GameVersion in
+their manifest. Only the page in use is in the game's Mods folder; the others wait in
+~/.local/share/bsmods/pages/<page>/{on,off} until you switch to them (after rolling the game back
+in Steam, for example).
 """
 import json
 import os
@@ -27,6 +32,8 @@ HOME = os.path.expanduser("~")
 DATA = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.join(HOME, ".local/share")), "bsmods")
 CONF = os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(HOME, ".config")), "bsmods", "config.json")
 DISABLED = os.path.join(DATA, "disabled")
+PAGES_DIR = os.path.join(DATA, "pages")
+PAGES = ("1.0", "U12", "U11")
 NEXUS = "https://www.nexusmods.com/bladeandsorcery/mods/"
 ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bsmods.svg")
 ARCHIVES = ("*.zip", "*.7z", "*.rar", "*.tar", "*.tar.gz", "*.tgz", "*.tar.xz")
@@ -51,14 +58,27 @@ def steam_libraries():
     return libs
 
 
+def load_conf():
+    try:
+        c = json.load(open(CONF, encoding="utf-8"))
+        return c if isinstance(c, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_conf(**changes):
+    c = load_conf()
+    c.update(changes)
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    with open(CONF, "w", encoding="utf-8") as f:
+        json.dump(c, f, indent=2)
+
+
 def find_game():
     """the game folder (the one with BladeAndSorcery_Data), or None"""
-    try:
-        override = json.load(open(CONF, encoding="utf-8")).get("game_dir", "")
-        if override and os.path.isdir(os.path.join(override, "BladeAndSorcery_Data")):
-            return override
-    except (OSError, ValueError):
-        pass
+    override = load_conf().get("game_dir", "")
+    if override and os.path.isdir(os.path.join(override, "BladeAndSorcery_Data")):
+        return override
     for lib in steam_libraries():
         manifest = os.path.join(lib, "steamapps", f"appmanifest_{APP_ID}.acf")
         try:
@@ -73,15 +93,79 @@ def find_game():
 
 
 def save_game_dir(path):
-    os.makedirs(os.path.dirname(CONF), exist_ok=True)
-    with open(CONF, "w", encoding="utf-8") as f:
-        json.dump({"game_dir": path}, f, indent=2)
+    save_conf(game_dir=path)
 
 
 def mods_dir(game):
     d = os.path.join(game, "BladeAndSorcery_Data", "StreamingAssets", "Mods")
     os.makedirs(d, exist_ok=True)
     return d
+
+
+# ---- pages (one mod set per game version) ------------------------------------------------------
+
+def page_for(game_version):
+    """the page a mod belongs on, from its manifest's GameVersion (no version: the current game)"""
+    v = game_version.strip().lstrip("vV")
+    if v.startswith("0.12"):
+        return "U12"
+    if v.startswith("0."):
+        return "U11"
+    return "1.0"
+
+
+def active_page():
+    p = load_conf().get("active_page")
+    return p if p in PAGES else "1.0"
+
+
+def page_dirs(game, page):
+    """(on, off) folders of a page: the game's own for the page in use, stored ones for the rest"""
+    if page == active_page():
+        return mods_dir(game), DISABLED
+    return os.path.join(PAGES_DIR, page, "on"), os.path.join(PAGES_DIR, page, "off")
+
+
+def move_all(src, dst):
+    """move every mod folder from src into dst: the names that were already in dst (left alone)"""
+    clashes = []
+    if not os.path.isdir(src):
+        return clashes
+    os.makedirs(dst, exist_ok=True)
+    for name in os.listdir(src):
+        path = os.path.join(src, name)
+        if not os.path.isdir(path):
+            continue
+        if os.path.exists(os.path.join(dst, name)):
+            clashes.append(name)
+            continue
+        shutil.move(path, os.path.join(dst, name))
+    return clashes
+
+
+def use_page(game, page):
+    """put a page's mods in the game (and the current page's in storage): names that couldn't move"""
+    old = active_page()
+    if page == old:
+        return []
+    old_on, old_off = page_dirs(game, old)
+    new_on, new_off = page_dirs(game, page)
+    store_on, store_off = os.path.join(PAGES_DIR, old, "on"), os.path.join(PAGES_DIR, old, "off")
+    clashes = move_all(old_on, store_on) + move_all(old_off, store_off)
+    clashes += move_all(new_on, old_on) + move_all(new_off, old_off)
+    save_conf(active_page=page)
+    return clashes
+
+
+def sort_into_pages(game):
+    """once: mods for another game version, from before there were pages, go to their own page"""
+    if load_conf().get("pages_sorted"):
+        return
+    here = active_page()
+    for m in list_mods(game, here):
+        if m["page"] != here:
+            move_mod(game, m, m["page"])
+    save_conf(pages_sorted=True)
 
 
 # ---- mods ---------------------------------------------------------------------------------------
@@ -105,9 +189,11 @@ def folder_size(path):
     return total
 
 
-def list_mods(game):
+def list_mods(game, page):
+    """the mods on a page; each one's "page" is where its game version says it belongs"""
     out = []
-    for base, enabled in ((mods_dir(game), True), (DISABLED, False)):
+    on_dir, off_dir = page_dirs(game, page)
+    for base, enabled in ((on_dir, True), (off_dir, False)):
         if not os.path.isdir(base):
             continue
         for name in sorted(os.listdir(base), key=str.lower):
@@ -115,17 +201,22 @@ def list_mods(game):
             if not os.path.isdir(path):
                 continue
             m = read_manifest(path)
-            out.append({"folder": name, "path": path, "enabled": enabled, "name": m.get("Name") or name,
-                        "version": m.get("ModVersion", ""), "author": m.get("Author", ""),
-                        "game": str(m.get("GameVersion", "")), "desc": m.get("Description", ""),
-                        "thumb": m.get("Thumbnail", ""), "size": folder_size(path)})
+            if not isinstance(m, dict):
+                m = {}
+            # manifests are hand-written: a version can be a number (2.4) instead of text
+            field = lambda k: "" if m.get(k) is None else str(m.get(k))
+            out.append({"folder": name, "path": path, "enabled": enabled, "name": field("Name") or name,
+                        "version": field("ModVersion"), "author": field("Author"),
+                        "game": field("GameVersion"), "desc": field("Description"),
+                        "thumb": field("Thumbnail"), "size": folder_size(path),
+                        "on_page": page, "page": page_for(field("GameVersion"))})
     out.sort(key=lambda m: m["name"].lower())
     return out
 
 
 def install(game, src):
-    """install every mod (folder with a manifest.json) in an archive or folder: their names"""
-    target = mods_dir(game)
+    """install every mod (folder with a manifest.json) in an archive or folder, each on the page for
+    its game version: [(name, page)]"""
     installed = []
     with tempfile.TemporaryDirectory(prefix="bsmods-") as tmp:
         if os.path.isdir(src):
@@ -145,20 +236,36 @@ def install(game, src):
             raise RuntimeError(f"{os.path.basename(src)} has no Blade & Sorcery mod in it (no manifest.json)")
         for d in dirs:
             name = os.path.basename(d) if d != root else re.sub(r"(\.tar)?\.[^.]+$", "", os.path.basename(src))
-            for base in (target, DISABLED):
+            m = read_manifest(d)
+            page = page_for(str(m.get("GameVersion", "")) if isinstance(m, dict) else "")
+            target, off = page_dirs(game, page)
+            for base in (target, off):
                 old = os.path.join(base, name)
                 if os.path.isdir(old):
                     shutil.rmtree(old)
+            os.makedirs(target, exist_ok=True)
             shutil.copytree(d, os.path.join(target, name))
-            installed.append(name)
+            installed.append((name, page))
     return installed
 
 
 def set_enabled(game, mod, on):
-    os.makedirs(DISABLED, exist_ok=True)
-    dest = os.path.join(mods_dir(game) if on else DISABLED, mod["folder"])
+    on_dir, off_dir = page_dirs(game, mod["on_page"])
+    os.makedirs(on_dir if on else off_dir, exist_ok=True)
+    dest = os.path.join(on_dir if on else off_dir, mod["folder"])
     if os.path.exists(dest):
         shutil.rmtree(dest)
+    shutil.move(mod["path"], dest)
+
+
+def move_mod(game, mod, page):
+    """move a mod to another page, keeping it on or off"""
+    on_dir, off_dir = page_dirs(game, page)
+    base = on_dir if mod["enabled"] else off_dir
+    os.makedirs(base, exist_ok=True)
+    dest = os.path.join(base, mod["folder"])
+    if os.path.exists(dest):
+        raise OSError(f"{page} already has a mod in a folder called {mod['folder']}")
     shutil.move(mod["path"], dest)
 
 
@@ -340,10 +447,11 @@ class ModCard(QFrame):
         if mod["author"]:
             chips.addWidget(label("by " + mod["author"], "muted"))
         if mod["game"]:
-            old = mod["game"].startswith("0.")
-            c = label(("Older game " if old else "Game ") + mod["game"], "badgeOld" if old else "badgeOk")
-            if old:
-                c.setToolTip("Made for an older Blade & Sorcery version (U11/U12): it may not load in 1.0")
+            wrong = mod["page"] != mod["on_page"]
+            c = label(("Made for " if wrong else "Game ") + mod["game"], "badgeOld" if wrong else "badgeOk")
+            if wrong:
+                c.setToolTip(f"Made for a different game version than {mod['on_page']}: it may not load. "
+                             f"⋯ → Move to {mod['page']} puts it on its own page")
             chips.addWidget(c)
         chips.addWidget(label(human(mod["size"]), "badge"))
         if not mod["enabled"]:
@@ -363,6 +471,10 @@ class ModCard(QFrame):
         more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(more)
         menu.addAction("Open its folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(mod["path"])))
+        menu.addSeparator()
+        for page in PAGES:
+            if page != mod["on_page"]:
+                menu.addAction(f"Move to {page} page", lambda p=page: win.move(mod, p))
         menu.addSeparator()
         menu.addAction("Remove...", lambda: win.remove(mod))
         more.setMenu(menu)
@@ -407,6 +519,12 @@ class Window(QMainWindow):
         self.setAcceptDrops(True)
         self.game = find_game()
         self.show_mode = "all"
+        if self.game:
+            try:
+                sort_into_pages(self.game)
+            except OSError as e:
+                print(f"bsmods: couldn't sort mods into pages: {e}", file=sys.stderr)
+        self.page = active_page()
 
         root = QWidget()
         root.setObjectName("root")
@@ -454,6 +572,36 @@ class Window(QMainWindow):
         more.setMenu(menu)
         head.addWidget(more)
         v.addLayout(head)
+
+        # pages: one mod set per game version
+        pages = QHBoxLayout()
+        pages.setSpacing(10)
+        pbox = QFrame()
+        pbox.setObjectName("segbox")
+        pl = QHBoxLayout(pbox)
+        pl.setContentsMargins(3, 3, 3, 3)
+        pl.setSpacing(2)
+        self.page_buttons = {}
+        pgroup = QButtonGroup(self)
+        for page in PAGES:
+            b = QPushButton(page)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, p=page: self.set_page(p))
+            pgroup.addButton(b)
+            pl.addWidget(b)
+            self.page_buttons[page] = b
+        self.page_buttons[self.page].setChecked(True)
+        pages.addWidget(pbox)
+        self.page_note = label("", "muted", wrap=True)
+        pages.addWidget(self.page_note, 1)
+        self.use_btn = QPushButton("Use this page")
+        self.use_btn.setObjectName("primary")
+        self.use_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.use_btn.clicked.connect(self.use_current_page)
+        pages.addWidget(self.use_btn)
+        v.addLayout(pages)
 
         # search + filter
         bar = QHBoxLayout()
@@ -537,6 +685,35 @@ class Window(QMainWindow):
                                 "Pick the game folder (the one with BladeAndSorcery_Data in it).")
         return self.change_game()
 
+    # -- pages --
+    def set_page(self, page):
+        self.page = page
+        self.page_buttons[page].setChecked(True)
+        self.refresh()
+
+    def use_current_page(self):
+        if not self.ensure_game():
+            return
+        old = active_page()
+        try:
+            clashes = use_page(self.game, self.page)
+        except OSError as e:
+            QMessageBox.warning(self, "Couldn't switch pages", str(e))
+            clashes = []
+        self.refresh()
+        self.say(f"The game now loads the {self.page} mods ({old} mods are stored)")
+        if clashes:
+            QMessageBox.warning(self, "Some mods stayed where they were",
+                                "These were in both places, so they weren't moved:\n\n" + "\n".join(clashes))
+
+    def move(self, mod, page):
+        try:
+            move_mod(self.game, mod, page)
+            self.say(f"Moved {mod['name']} to the {page} page")
+        except OSError as e:
+            QMessageBox.warning(self, "Couldn't move it", str(e))
+        self.refresh()
+
     # -- list --
     def set_mode(self, mode):
         self.show_mode = mode
@@ -592,9 +769,22 @@ class Window(QMainWindow):
                              "Install it in Steam, or pick its folder with ⋯ → Change game folder.", buttons=False)
             self.cards.addStretch(1)
             return
-        mods = list_mods(self.game)
+        mods = list_mods(self.game, self.page)
+        active = active_page()
+        for page, b in self.page_buttons.items():
+            n = len(list_mods(self.game, page)) if page != self.page else len(mods)
+            b.setText(f"{'●  ' if page == active else ''}{page}  ({n})")
+            b.setToolTip("In the game now" if page == active else "Stored: the game doesn't see these")
+        if self.page == active:
+            self.page_note.setText(f"In the game now. Your game should be on {self.page}.")
+            self.use_btn.hide()
+        else:
+            self.page_note.setText(f"Stored, the game doesn't see these. Set the game to {self.page} in Steam "
+                                   "(Properties → Betas), then use this page.")
+            self.use_btn.show()
         on = sum(1 for m in mods if m["enabled"])
-        self.subtitle.setText(f"Blade & Sorcery  ·  {len(mods)} mod{'s' if len(mods) != 1 else ''}, {on} on")
+        self.subtitle.setText(f"Blade & Sorcery {self.page}  ·  {len(mods)} mod{'s' if len(mods) != 1 else ''}, "
+                              f"{on} on")
         self.chip.setObjectName("chipOk")
         self.chip.setText("Game found")
         self.chip.setToolTip(mods_dir(self.game))
@@ -604,8 +794,9 @@ class Window(QMainWindow):
                  if (self.show_mode == "all" or m["enabled"] == (self.show_mode == "on"))
                  and (not q or q in m["name"].lower() or q in m["author"].lower())]
         if not mods:
-            self.empty_state("No mods yet", "Download mods from Nexus Mods (use Manual download), then drop the "
-                             "files on this window or press Install mods.")
+            self.empty_state(f"No {self.page} mods yet", "Download mods from Nexus Mods (use Manual download), "
+                             "then drop the files on this window or press Install mods. Each one goes on the "
+                             "page for the game version it was made for.")
         elif not shown:
             self.empty_state("Nothing matches", "Try another search, or show All.", buttons=False)
         for m in shown:
@@ -628,9 +819,13 @@ class Window(QMainWindow):
                     errors.append(str(e))
         finally:
             QApplication.restoreOverrideCursor()
+        # show the page the mods went to
+        pages = {p for _, p in done}
+        if len(pages) == 1 and self.page not in pages:
+            self.set_page(pages.pop())
         self.refresh()
         if done:
-            self.say("Installed " + ", ".join(done))
+            self.say("Installed " + ", ".join(f"{n} ({p})" for n, p in done))
         if errors:
             QMessageBox.warning(self, "Some mods weren't installed", "\n\n".join(errors))
 
@@ -651,7 +846,7 @@ class Window(QMainWindow):
         if not self.ensure_game():
             return
         n = 0
-        for m in list_mods(self.game):
+        for m in list_mods(self.game, self.page):
             if m["enabled"] != on:
                 set_enabled(self.game, m, on)
                 n += 1
