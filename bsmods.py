@@ -10,6 +10,10 @@ Mods are kept on three pages, one per game version (1.0, U12, U11), sorted by th
 their manifest. Only the page in use is in the game's Mods folder; the others wait in
 ~/.local/share/bsmods/pages/<page>/{on,off} until you switch to them (after rolling the game back
 in Steam, for example).
+
+On each page, NSFW mods (found by their name and description, or marked by hand) have their own
+tab, and mods you hide only show in the Hidden tab. Both are kept in the config file (by folder
+name), never in the mods themselves. Mods show as a list or a grid.
 """
 import json
 import os
@@ -24,7 +28,7 @@ from PyQt6.QtCore import QPropertyAnimation, QRectF, Qt, QTimer, QUrl, pyqtPrope
 from PyQt6.QtGui import (QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter,
                          QPainterPath, QPalette, QPen, QPixmap)
 from PyQt6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QFileDialog, QFrame,
-                             QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
+                             QGraphicsOpacityEffect, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
                              QMessageBox, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
 APP_ID = 629730
@@ -276,6 +280,63 @@ def human(n):
         n /= 1024
 
 
+# ---- NSFW and hidden mods -----------------------------------------------------------------------
+
+NSFW_WORDS = re.compile(r"\b(nsfw|nude|nudes|nudity|naked|lewd|hentai|porn|porno|explicit|18\+|sexy|erotic|"
+                        r"underwear|lingerie|bikini|topless)\b", re.IGNORECASE)
+
+
+def looks_nsfw(mod):
+    return bool(NSFW_WORDS.search(" ".join((mod["name"], mod["folder"], mod["desc"]))))
+
+
+def is_nsfw(mod):
+    """marked by hand (either way), otherwise found by its name and description"""
+    marks = load_conf().get("nsfw", {})
+    mark = marks.get(mod["folder"]) if isinstance(marks, dict) else None
+    return mark if isinstance(mark, bool) else looks_nsfw(mod)
+
+
+def set_nsfw(mod, on):
+    marks = load_conf().get("nsfw", {})
+    marks = marks if isinstance(marks, dict) else {}
+    # back to what the words say: no mark needed
+    if on == looks_nsfw(mod):
+        marks.pop(mod["folder"], None)
+    else:
+        marks[mod["folder"]] = on
+    save_conf(nsfw=marks)
+
+
+def is_hidden(mod):
+    return mod["folder"] in load_conf().get("hidden", [])
+
+
+def set_hidden(mod, on):
+    hidden = [h for h in load_conf().get("hidden", []) if h != mod["folder"]]
+    if on:
+        hidden.append(mod["folder"])
+    save_conf(hidden=sorted(hidden, key=str.lower))
+
+
+def forget_marks(mod):
+    """a removed mod: drop its NSFW and hidden marks"""
+    c = load_conf()
+    marks = c.get("nsfw", {})
+    if isinstance(marks, dict):
+        marks.pop(mod["folder"], None)
+    save_conf(nsfw=marks if isinstance(marks, dict) else {},
+              hidden=[h for h in c.get("hidden", []) if h != mod["folder"]])
+
+
+TAB_NAMES = {"mods": "Mods", "nsfw": "NSFW", "hidden": "Hidden"}
+
+
+def tab_of(mod):
+    """which tab a mod shows in: hidden first, then NSFW"""
+    return "hidden" if is_hidden(mod) else "nsfw" if is_nsfw(mod) else "mods"
+
+
 # ---- window -------------------------------------------------------------------------------------
 
 ACCENT = "#c9a96e"
@@ -302,6 +363,9 @@ QLineEdit {{ background: #1c1c22; color: #e8e8ef; border: 1px solid #2a2a33; bor
 QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
 QFrame#card {{ background: #1b1b21; border: 1px solid #26262e; border-radius: 14px; }}
 QFrame#card:hover {{ background: #202027; border: 1px solid #30303a; }}
+QFrame#tile {{ background: #1b1b21; border: 1px solid #26262e; border-radius: 14px; }}
+QFrame#tile:hover {{ background: #202027; border: 1px solid #30303a; }}
+QLabel#badgeNsfw {{ background: rgba(224,108,180,0.16); color: #ee93c8; border-radius: 7px; padding: 2px 8px; font-size: 11px; }}
 QFrame#segbox {{ background: #1c1c22; border: 1px solid #2a2a33; border-radius: 10px; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
@@ -402,6 +466,47 @@ def label(text, name=None, wrap=False):
     return l
 
 
+def more_button(win, mod):
+    """the ⋯ menu of a mod"""
+    more = QToolButton()
+    more.setText("⋯")
+    more.setCursor(Qt.CursorShape.PointingHandCursor)
+    more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    menu = QMenu(more)
+    menu.addAction("Open its folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(mod["path"])))
+    menu.addSeparator()
+    nsfw, hidden = is_nsfw(mod), is_hidden(mod)
+    menu.addAction("Not NSFW" if nsfw else "Mark as NSFW", lambda: win.mark_nsfw(mod, not nsfw))
+    menu.addAction("Unhide" if hidden else "Hide", lambda: win.mark_hidden(mod, not hidden))
+    menu.addSeparator()
+    for page in PAGES:
+        if page != mod["on_page"]:
+            menu.addAction(f"Move to {page} page", lambda p=page: win.move(mod, p))
+    menu.addSeparator()
+    menu.addAction("Remove...", lambda: win.remove(mod))
+    more.setMenu(menu)
+    return more
+
+
+def mod_switch(win, mod):
+    sw = Switch(mod["enabled"])
+    sw.setToolTip("On: the game loads it. Off: kept, but the game doesn't see it")
+    sw.toggled.connect(lambda on: win.toggle(mod, on))
+    return sw
+
+
+def mod_thumb(mod, w, h):
+    thumb = QLabel()
+    thumb.setFixedSize(w, h)
+    pix = QPixmap(os.path.join(mod["path"], mod["thumb"])) if mod["thumb"] else QPixmap()
+    thumb.setPixmap(rounded(pix, w, h) if not pix.isNull() else placeholder(mod["name"], w, h))
+    if not mod["enabled"]:
+        eff = QGraphicsOpacityEffect(thumb)
+        eff.setOpacity(0.4)
+        thumb.setGraphicsEffect(eff)
+    return thumb
+
+
 class ModCard(QFrame):
     def __init__(self, win, mod):
         super().__init__()
@@ -411,16 +516,7 @@ class ModCard(QFrame):
         lay.setContentsMargins(12, 12, 14, 12)
         lay.setSpacing(14)
 
-        tw, th = 128, 72
-        thumb = QLabel()
-        thumb.setFixedSize(tw, th)
-        pix = QPixmap(os.path.join(mod["path"], mod["thumb"])) if mod["thumb"] else QPixmap()
-        thumb.setPixmap(rounded(pix, tw, th) if not pix.isNull() else placeholder(mod["name"], tw, th))
-        if not mod["enabled"]:
-            eff = QGraphicsOpacityEffect(thumb)
-            eff.setOpacity(0.4)
-            thumb.setGraphicsEffect(eff)
-        lay.addWidget(thumb)
+        lay.addWidget(mod_thumb(mod, 128, 72))
 
         text = QVBoxLayout()
         text.setSpacing(4)
@@ -454,31 +550,56 @@ class ModCard(QFrame):
                              f"⋯ → Move to {mod['page']} puts it on its own page")
             chips.addWidget(c)
         chips.addWidget(label(human(mod["size"]), "badge"))
+        if is_nsfw(mod):
+            chips.addWidget(label("NSFW", "badgeNsfw"))
         if not mod["enabled"]:
             chips.addWidget(label("Off", "badge"))
         chips.addStretch(1)
         text.addLayout(chips)
         lay.addLayout(text, 1)
 
-        sw = Switch(mod["enabled"])
-        sw.setToolTip("On: the game loads it. Off: kept, but the game doesn't see it")
-        sw.toggled.connect(lambda on: win.toggle(mod, on))
-        lay.addWidget(sw, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(mod_switch(win, mod), 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(more_button(win, mod), 0, Qt.AlignmentFlag.AlignVCenter)
 
-        more = QToolButton()
-        more.setText("⋯")
-        more.setCursor(Qt.CursorShape.PointingHandCursor)
-        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(more)
-        menu.addAction("Open its folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(mod["path"])))
-        menu.addSeparator()
-        for page in PAGES:
-            if page != mod["on_page"]:
-                menu.addAction(f"Move to {page} page", lambda p=page: win.move(mod, p))
-        menu.addSeparator()
-        menu.addAction("Remove...", lambda: win.remove(mod))
-        more.setMenu(menu)
-        lay.addWidget(more, 0, Qt.AlignmentFlag.AlignVCenter)
+
+class ModTile(QFrame):
+    """a mod in the grid: big thumbnail, name, and the switch"""
+    W = 220
+
+    def __init__(self, win, mod):
+        super().__init__()
+        self.setObjectName("tile")
+        self.setFixedWidth(self.W)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        lay.addWidget(mod_thumb(mod, self.W - 20, (self.W - 20) * 9 // 16))
+
+        name = label(mod["name"])
+        name.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {'#e8e8ef' if mod['enabled'] else '#7a7a88'};")
+        name.setText(QFontMetrics(name.font()).elidedText(mod["name"], Qt.TextElideMode.ElideRight, self.W - 40))
+        name.setToolTip(mod["name"] + (f"\nby {mod['author']}" if mod["author"] else "")
+                        + (f"\n\n{mod['desc']}" if mod["desc"] else ""))
+        lay.addWidget(name)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        mid = Qt.AlignmentFlag.AlignVCenter
+        if mod["version"]:
+            row.addWidget(label("v" + mod["version"].lstrip("vV"), "badge"), 0, mid)
+        if mod["game"] and mod["page"] != mod["on_page"]:
+            c = label("Old", "badgeOld")
+            c.setToolTip(f"Made for {mod['game']}, not {mod['on_page']}: it may not load. "
+                         f"⋯ → Move to {mod['page']} puts it on its own page")
+            row.addWidget(c, 0, mid)
+        if is_nsfw(mod):
+            row.addWidget(label("NSFW", "badgeNsfw"), 0, mid)
+        row.addStretch(1)
+        row.addWidget(mod_switch(win, mod), 0, mid)
+        row.addWidget(more_button(win, mod), 0, mid)
+        lay.addLayout(row)
+        # the grid never squeezes a tile
+        self.setFixedHeight(self.sizeHint().height())
 
 
 class DropOverlay(QWidget):
@@ -519,6 +640,9 @@ class Window(QMainWindow):
         self.setAcceptDrops(True)
         self.game = find_game()
         self.show_mode = "all"
+        self.tab = "mods"
+        self.view = load_conf().get("view") if load_conf().get("view") in ("list", "grid") else "list"
+        self.grid_cols = 0
         if self.game:
             try:
                 sort_into_pages(self.game)
@@ -603,6 +727,48 @@ class Window(QMainWindow):
         pages.addWidget(self.use_btn)
         v.addLayout(pages)
 
+        # tabs: the page's mods, its NSFW ones, and the ones you hid
+        tabs = QHBoxLayout()
+        tabs.setSpacing(10)
+        tbox = QFrame()
+        tbox.setObjectName("segbox")
+        tl = QHBoxLayout(tbox)
+        tl.setContentsMargins(3, 3, 3, 3)
+        tl.setSpacing(2)
+        self.tab_buttons = {}
+        tgroup = QButtonGroup(self)
+        for key, text in TAB_NAMES.items():
+            b = QPushButton(text)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self.set_tab(k))
+            tgroup.addButton(b)
+            tl.addWidget(b)
+            self.tab_buttons[key] = b
+        self.tab_buttons["mods"].setChecked(True)
+        tabs.addWidget(tbox)
+        tabs.addStretch(1)
+        vbox = QFrame()
+        vbox.setObjectName("segbox")
+        vl = QHBoxLayout(vbox)
+        vl.setContentsMargins(3, 3, 3, 3)
+        vl.setSpacing(2)
+        self.view_buttons = {}
+        vgroup = QButtonGroup(self)
+        for key, text in (("list", "☰  List"), ("grid", "▦  Grid")):
+            b = QPushButton(text)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, k=key: self.set_view(k))
+            vgroup.addButton(b)
+            vl.addWidget(b)
+            self.view_buttons[key] = b
+        self.view_buttons[self.view].setChecked(True)
+        tabs.addWidget(vbox)
+        v.addLayout(tabs)
+
         # search + filter
         bar = QHBoxLayout()
         bar.setSpacing(10)
@@ -663,6 +829,12 @@ class Window(QMainWindow):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self.overlay.setGeometry(self.centralWidget().rect())
+        # the grid fits as many columns as the window has room for
+        if self.view == "grid" and self.columns() != self.grid_cols:
+            QTimer.singleShot(0, self.refresh)
+
+    def columns(self):
+        return max(1, (self.scroll.viewport().width() - 4 + 10) // (ModTile.W + 10))
 
     # -- game folder --
     def change_game(self):
@@ -717,6 +889,27 @@ class Window(QMainWindow):
     # -- list --
     def set_mode(self, mode):
         self.show_mode = mode
+        self.refresh()
+
+    def set_tab(self, tab):
+        self.tab = tab
+        self.tab_buttons[tab].setChecked(True)
+        self.refresh()
+
+    def set_view(self, view):
+        self.view = view
+        self.view_buttons[view].setChecked(True)
+        save_conf(view=view)
+        self.refresh()
+
+    def mark_nsfw(self, mod, on):
+        set_nsfw(mod, on)
+        self.say(f"{mod['name']} {'is in the NSFW tab' if on else 'is no longer NSFW'}")
+        self.refresh()
+
+    def mark_hidden(self, mod, on):
+        set_hidden(mod, on)
+        self.say(f"{mod['name']} {'is hidden (it still loads when it is on)' if on else 'is back in its tab'}")
         self.refresh()
 
     def clear_cards(self):
@@ -789,18 +982,43 @@ class Window(QMainWindow):
         self.chip.setText("Game found")
         self.chip.setToolTip(mods_dir(self.game))
         self.chip.setStyle(self.chip.style())
+        tabs = {m["folder"]: tab_of(m) for m in mods}
+        for key, b in self.tab_buttons.items():
+            n = sum(1 for t in tabs.values() if t == key)
+            b.setText(f"{TAB_NAMES[key]}  ({n})")
         q = self.filter.text().strip().lower()
         shown = [m for m in mods
-                 if (self.show_mode == "all" or m["enabled"] == (self.show_mode == "on"))
+                 if tabs[m["folder"]] == self.tab
+                 and (self.show_mode == "all" or m["enabled"] == (self.show_mode == "on"))
                  and (not q or q in m["name"].lower() or q in m["author"].lower())]
         if not mods:
             self.empty_state(f"No {self.page} mods yet", "Download mods from Nexus Mods (use Manual download), "
                              "then drop the files on this window or press Install mods. Each one goes on the "
                              "page for the game version it was made for.")
+        elif not any(t == self.tab for t in tabs.values()):
+            self.empty_state(*{
+                "mods": ("Every mod here is NSFW or hidden", "They're in the NSFW and Hidden tabs."),
+                "nsfw": ("No NSFW mods", "Mods with NSFW words in their name or description show here. "
+                         "⋯ → Mark as NSFW moves any other mod here."),
+                "hidden": ("No hidden mods", "⋯ → Hide moves a mod here, out of the other tabs. "
+                           "Hiding doesn't turn it off: the game still loads it while it's on."),
+            }[self.tab], buttons=False)
         elif not shown:
             self.empty_state("Nothing matches", "Try another search, or show All.", buttons=False)
-        for m in shown:
-            self.cards.addWidget(ModCard(self, m))
+        if self.view == "grid" and shown:
+            self.grid_cols = self.columns()
+            box = QWidget()
+            grid = QGridLayout(box)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setSpacing(10)
+            for i, m in enumerate(shown):
+                grid.addWidget(ModTile(self, m), i // self.grid_cols, i % self.grid_cols,
+                               Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            grid.setColumnStretch(self.grid_cols, 1)
+            self.cards.addWidget(box)
+        else:
+            for m in shown:
+                self.cards.addWidget(ModCard(self, m))
         self.cards.addStretch(1)
 
     # -- actions --
@@ -858,6 +1076,7 @@ class Window(QMainWindow):
                 != QMessageBox.StandardButton.Yes:
             return
         shutil.rmtree(mod["path"], ignore_errors=True)
+        forget_marks(mod)
         self.say(f"Removed {mod['name']}")
         self.refresh()
 

@@ -15,7 +15,12 @@ like on Windows; only the Windows mod managers don't run. BS Mods does their job
   `~/.local/share/bsmods/pages`. After switching the game version in Steam (Properties → Betas),
   open that page and press **Use this page** to swap its mods in. A mod on the wrong page can be
   moved with its ⋯ menu
-- shows each mod's version, author and the game version it's for
+- shows each mod's version, author and the game version it's for, as a **list or a grid**
+- puts **NSFW** mods in their own tab: ones with NSFW words in their name or description go there by
+  themselves, and ⋯ → **Mark as NSFW** / **Not NSFW** moves any mod in or out
+- **hides** mods you don't want to see (⋯ → **Hide**): they only show in the Hidden tab. Hiding
+  doesn't turn a mod off; the game still loads it while it's on. NSFW and hidden marks are kept in
+  `~/.config/bsmods/config.json`, not in the mods
 - removes mods, opens the Mods folder, and links to Nexus Mods (**Get mods**)
 
 ## Install
