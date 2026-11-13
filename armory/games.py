@@ -12,7 +12,7 @@ A game's "layout" says where the files of a downloaded mod go (see layout.py):
   default       where everything else goes ("" is the game folder)
   ignore_top    files at the top of a package that are only the package's own (Thunderstore)
 A path that starts with "@prefix/" is in the Proton prefix's user folder
-(compatdata/<appid>/pfx/drive_c/users/steamuser), not the game folder.
+(compatdata/<appid>/pfx/drive_c/users/steamuser), "@home/" in your home folder (native Linux games).
 """
 import os
 import re
@@ -65,6 +65,9 @@ def plugins(appdata, masters, star=True):
     return {"appdata": appdata, "masters": masters, "star": star}
 
 
+BG3_MODS = "@prefix/AppData/Local/Larian Studios/Baldur's Gate 3/Mods"
+OBR_PAKS = "OblivionRemastered/Content/Paks/~mods"
+OBR_DATA = "OblivionRemastered/Content/Dev/ObvData/Data"
 SKYRIM_MASTERS = ["Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm"]
 
 # id: (name, steam appid, nexus domain, thunderstore community, folder that proves it, layout, extra)
@@ -164,6 +167,52 @@ GAMES = {
                      layout={"root_markers": ["mods", "dlc", "bin"],
                              "folder_mod": {"marker": "content", "dir": "Mods", "prefix": "mod"},
                              "default": "Mods/mod{name}"}),
+    # more games people mod a lot
+    "baldursgate3": dict(name="Baldur's Gate 3", appid=1086940, nexus="baldursgate3", proof="bin",
+                         layout={"root_markers": ["bin", "data"],
+                                 "ext_map": {".pak": BG3_MODS, ".dll": "bin"},
+                                 "default": BG3_MODS, "keep_out": ["info.json"]}, bg3=True),
+    "rimworld": dict(name="RimWorld", appid=294100, nexus="rimworld", proof="Data",
+                     layout={"folder_mod": {"marker": "about", "dir": "Mods"}, "root_markers": ["mods"],
+                             "default": "Mods/{name}"}),
+    "bannerlord": dict(name="Mount & Blade II: Bannerlord", appid=261550, nexus="mountandblade2bannerlord",
+                       proof="Modules",
+                       layout={"folder_mod": {"marker": "submodule.xml", "dir": "Modules"}, "root_markers": ["modules"],
+                               "default": "Modules/{name}"}),
+    "7daystodie": dict(name="7 Days to Die", appid=251570, nexus="7daystodie", proof="7DaysToDie_Data",
+                       layout={"folder_mod": {"marker": "modinfo.xml", "dir": "Mods"}, "root_markers": ["mods"],
+                               "default": "Mods/{name}"}),
+    "projectzomboid": dict(name="Project Zomboid", appid=108600, nexus="projectzomboid", proof="media",
+                           layout={"folder_mod": {"marker": "mod.info", "dir": "@home/Zomboid/mods"},
+                                   "default": "@home/Zomboid/mods/{name}"}),
+    "kcd2": dict(name="Kingdom Come: Deliverance II", appid=1771300, nexus="kingdomcomedeliverance2", proof="Data",
+                 layout={"folder_mod": {"marker": "mod.manifest", "dir": "Mods"}, "root_markers": ["mods"],
+                         "default": "Mods/{name}"}),
+    "thesims4": dict(name="The Sims 4", appid=1222670, nexus="thesims4", proof="Game",
+                     layout={"default": "@prefix/Documents/Electronic Arts/The Sims 4/Mods/{name}"}),
+    "balatro": dict(name="Balatro", appid=2379780, nexus="balatro", thunderstore="balatro", proof="Balatro.exe",
+                    layout={"root_markers": ["version.dll"], "dir_map": {"mods": "@prefix/AppData/Roaming/Balatro/Mods"},
+                            "default": "@prefix/AppData/Roaming/Balatro/Mods/{name}", "ignore_top": THUNDERSTORE_TOP}),
+    "marvelrivals": dict(name="Marvel Rivals", appid=2767030, nexus="marvelrivals", proof="MarvelGame",
+                         layout={"root_markers": ["marvelgame"],
+                                 "default": "MarvelGame/Marvel/Content/Paks/~mods"}),
+    "eldenring": dict(name="Elden Ring", appid=1245620, nexus="eldenring", proof="Game",
+                      layout={"root_markers": ["game", "modengine2", "mod", "config_eldenring.toml",
+                                               "modengine2_launcher.exe", "launchmod_eldenring.bat", "dinput8.dll"],
+                              "default": "Game"}),
+    "oblivionremastered": dict(name="Oblivion Remastered", appid=2623190, nexus="oblivionremastered",
+                               proof="OblivionRemastered",
+                               layout={"root_markers": ["oblivionremastered", "engine"],
+                                       "ext_map": {".pak": OBR_PAKS, ".utoc": OBR_PAKS, ".ucas": OBR_PAKS,
+                                                   ".esp": OBR_DATA, ".esm": OBR_DATA, ".bsa": OBR_DATA},
+                                       "default": OBR_DATA}),
+    "hades2": dict(name="Hades II", appid=1145350, nexus="hades2", thunderstore="hades-ii", proof="Ship",
+                   layout={"root_markers": ["ship"],
+                           "dir_map": {"plugins": "Ship/ReturnOfModding/plugins/{name}",
+                                       "plugins_data": "Ship/ReturnOfModding/plugins_data/{name}",
+                                       "config": "Ship/ReturnOfModding/config", "returnofmodding": "Ship/ReturnOfModding"},
+                           "ext_map": {".lua": "Ship/ReturnOfModding/plugins/{name}", ".dll": "Ship"},
+                           "default": "Ship/ReturnOfModding/plugins/{name}", "ignore_top": THUNDERSTORE_TOP}),
     "hollowknight": dict(name="Hollow Knight", appid=367520, nexus="hollowknight", proof="hollow_knight_Data",
                          layout={"root_markers": ["hollow_knight_data"],
                                  "default": "hollow_knight_Data/Managed/Mods/{name}"}),
@@ -320,14 +369,22 @@ class Game:
         except OSError:
             return True
 
-    def resolve(self, rel):
-        """a staged path (game-relative, or @prefix/...) to where it goes on disk, or None"""
+    def root_for(self, rel):
+        """(base folder, path under it) for a staged path: the game folder, the Proton prefix's user
+        folder (@prefix/) or your home folder (@home/); base is None when it doesn't exist"""
         if rel.startswith("@prefix/"):
-            base = self.prefix_user
-            if not base:
-                return None
-            return os.path.join(base, rel[len("@prefix/"):])
-        return os.path.join(self.path, rel) if self.path else None
+            return self.prefix_user, rel[len("@prefix/"):]
+        if rel.startswith("@home/"):
+            return HOME, rel[len("@home/"):]
+        if rel.startswith("@keep/"):
+            # kept with the mod, never put in the game (BG3's info.json)
+            return None, rel
+        return self.path, rel
+
+    def resolve(self, rel):
+        """a staged path (game-relative, @prefix/... or @home/...) to where it goes on disk, or None"""
+        base, sub = self.root_for(rel)
+        return os.path.join(base, sub) if base else None
 
 
 def proof_ok(path, spec):

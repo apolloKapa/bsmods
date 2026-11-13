@@ -275,6 +275,8 @@ class Store:
             if only_enabled and mid not in self.profile["enabled"]:
                 continue
             for key, rel in staged_files(self.mod_path(mid)).items():
+                if key.startswith("@keep/"):
+                    continue
                 out.setdefault(key, []).append((mid, rel))
         return out
 
@@ -386,8 +388,7 @@ class Store:
                     if base is None:
                         stats["skipped"].append(rel)
                         continue
-                    root = g.prefix_user if rel.startswith("@prefix/") else g.path
-                    sub = rel[len("@prefix/"):] if rel.startswith("@prefix/") else rel
+                    root, sub = g.root_for(rel)
                     dest = resolve_case(root, sub)
                     if os.path.lexists(dest):
                         if os.path.isdir(dest) and not os.path.islink(dest):
@@ -424,6 +425,14 @@ class Store:
                     self.write_plugins()
                 except OSError as e:
                     stats["skipped"].append(f"Plugins.txt: {e}")
+            if self.game.spec.get("bg3"):
+                from . import bg3
+                try:
+                    _, note = bg3.write(self)
+                    if note:
+                        stats["notes"] = [note]
+                except (OSError, ValueError) as e:
+                    stats["skipped"].append(f"modsettings.lsx: {e}")
             return stats
 
     @staticmethod

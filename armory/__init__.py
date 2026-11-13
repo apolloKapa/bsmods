@@ -1,2 +1,2 @@
 """Armory: a mod manager for Linux games (Steam + Proton)."""
-VERSION = "2.1.1"
+VERSION = "2.2.0"

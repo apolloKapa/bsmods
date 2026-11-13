@@ -382,7 +382,8 @@ class SettingsDialog(QDialog):
         self.watch.setChecked(config.get("watch_downloads", True))
         self.watch.toggled.connect(lambda on: (config.save_conf(watch_downloads=on), self.window.watch_downloads()))
         f.addRow(self.watch)
-        self.upd = QCheckBox("Check for Armory updates (asks GitHub once a day; nothing about you is sent)")
+        self.upd = QCheckBox("Check GitHub for Armory updates once a day")
+        self.upd.setToolTip("Only asks GitHub for the newest release; nothing about you or your mods is sent")
         self.upd.setChecked(config.get("check_updates", True))
         self.upd.toggled.connect(lambda on: config.save_conf(check_updates=on))
         urow = QHBoxLayout()
@@ -420,6 +421,50 @@ class SettingsDialog(QDialog):
         f.addWidget(self.adult)
         v.addWidget(box)
         v.addStretch(1)
+
+
+class CollectionDialog(QDialog):
+    """the mods of a Nexus collection: pick which to install (optional ones start unticked)"""
+    def __init__(self, parent, c, store):
+        super().__init__(parent)
+        self.c = c
+        self.setWindowTitle(c["name"])
+        self.resize(640, 620)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 20, 22, 18)
+        v.setSpacing(10)
+        v.addWidget(label(c["name"], "title"))
+        if c.get("summary"):
+            v.addWidget(label(c["summary"], "muted", True))
+        have = {(int((m.get("source") or {}).get("mod_id") or 0), int((m.get("source") or {}).get("file_id") or 0))
+                for m in store.mods.values() if (m.get("source") or {}).get("type") == "nexus"}
+        self.list = QListWidget()
+        self.list.setObjectName("plain")
+        for f in c["files"]:
+            installed = (f["mod_id"], f["file_id"]) in have
+            it = QListWidgetItem(f"{f['name']}   ·   {f['file_name']} v{f['version'] or '?'}"
+                                 + ("   ·   optional" if f["optional"] else "")
+                                 + ("   ·   installed" if installed else ""))
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Unchecked if f["optional"] else Qt.CheckState.Checked)
+            it.setData(Qt.ItemDataRole.UserRole, f)
+            self.list.addItem(it)
+        v.addWidget(label(f"Revision {c.get('revision')}  ·  {len(c['files'])} mods", "small"))
+        v.addWidget(self.list, 1)
+        self.new_profile = QCheckBox("Install into a new profile named after the collection")
+        self.new_profile.setChecked(True)
+        v.addWidget(self.new_profile)
+        v.addWidget(label("Mods with an installer (FOMOD) ask their questions as they arrive. Collections can also "
+                          "carry extra steps (patches, preset choices) that Armory doesn't apply.", "small", True))
+        r = QHBoxLayout()
+        r.addStretch(1)
+        r.addWidget(button("Cancel", self.reject))
+        r.addWidget(button("Install", self.accept, "primary"))
+        v.addLayout(r)
+
+    def chosen(self):
+        return [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.CheckState.Checked]
 
 
 class ImportProfileDialog(QDialog):

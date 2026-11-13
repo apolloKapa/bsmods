@@ -247,7 +247,7 @@ def plan(root, layout, name):
                     folder = prefix + folder
                 for src, rel in files_under(d):
                     out.append((src, join(fm["dir"], os.path.join(folder, rel))))
-            return finish(out, name)
+            return finish(out, name, layout.get("keep_out", ()))
 
     # 2. an archive laid out like the game folder
     markers = layout.get("root_markers", [])
@@ -259,11 +259,11 @@ def plan(root, layout, name):
                 # a loader's own top folder is the root; "Data" at the top is the Data folder
                 for src, rel in files_under(d, ignore):
                     out.append((src, rel))
-                return finish(out, name)
+                return finish(out, name, layout.get("keep_out", ()))
             if data and any(matches(n, data["markers"]) for n in names):
                 for src, rel in files_under(d, ignore):
                     out.append((src, join(data["dir"], rel)))
-                return finish(out, name)
+                return finish(out, name, layout.get("keep_out", ()))
 
     # 3. known top-level folders (plugins/, config/, ...), loose files by extension
     base = unwrap(root)
@@ -291,14 +291,18 @@ def plan(root, layout, name):
             ext = os.path.splitext(n)[1].lower()
             target = emap.get(ext)
             out.append((p, join(fill(target, safe) if target is not None else default, n)))
-    return finish(out, name)
+    return finish(out, name, layout.get("keep_out", ()))
 
 
-def finish(out, name):
+def finish(out, name, keep=()):
+    """clean paths; files the layout keeps out of the game go under @keep/ (staged, never deployed)"""
     if not out:
         raise LayoutError(f"{name} has no files in it")
     seen, clean = set(), []
+    safe = re.sub(r'[<>:"/\\|?*]+', "_", name).strip() or "Mod"
     for src, rel in out:
+        if keep and matches(os.path.basename(rel), keep):
+            rel = f"@keep/{safe}/{os.path.basename(rel)}"
         rel = os.path.normpath(rel).replace(os.sep, "/")
         if rel.startswith("../") or rel.startswith("/") or rel == "..":
             continue

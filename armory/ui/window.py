@@ -18,14 +18,15 @@ from ..fomod import Fomod
 from ..store import DeployError, Store, resolve_case, staged_files
 from . import tasks
 from .browse import BrowsePage
-from .dialogs import (AddGameDialog, FomodWizard, ImportProfileDialog, ModDetailsDialog, NexusFilesDialog,
-                      SettingsDialog)
+from .dialogs import (AddGameDialog, CollectionDialog, FomodWizard, ImportProfileDialog, ModDetailsDialog,
+                      NexusFilesDialog, SettingsDialog)
 from .downloads import Downloads, DownloadsPage
 from .mods import ModsPage, PluginsPage
 from . import theme as T
 from .theme import ICON, Tabs, Toast, blurred, button, label, menu_button, placeholder, restyle, rounded
 
 PROXY_DLLS = {"winhttp.dll": "BepInEx", "version.dll": "MelonLoader", "dinput8.dll": "the script loader",
+              "dwrite.dll": "the Script Extender", "d3d12.dll": "Hell2Modding",
               "dxgi.dll": "the injector", "d3d11.dll": "the injector", "winmm.dll": "the loader",
               "dsound.dll": "the loader"}
 OLD_BSMODS = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local/share"), "bsmods")
@@ -632,6 +633,8 @@ class Window(QMainWindow):
 
         def done(stats):
             self.deploying = False
+            for note in stats.get("notes", []):
+                self.say(note)
             if stats.get("skipped"):
                 self.say(f"Some files weren't put in the game: {', '.join(stats['skipped'][:3])}"
                          + (" ..." if len(stats["skipped"]) > 3 else ""))
@@ -675,7 +678,9 @@ class Window(QMainWindow):
             return
         if g.appid and g.windows_build and not g.launch:
             deployed = self.store.deployed()["files"]
-            needed = sorted({k for k in deployed if k in PROXY_DLLS})
+            # loader DLLs at the top of the game folder or one or two folders down (bin/, Ship/)
+            needed = sorted({k.split("/")[-1] for k in deployed
+                             if k.split("/")[-1] in PROXY_DLLS and k.count("/") <= 2 and not k.startswith("@")})
             opts = (games.steam_launch_options(g.appid) or "").lower()
             missing = [d for d in needed if d.removesuffix(".dll") + "=" not in opts.replace(" ", "")
                        and d.removesuffix(".dll") not in opts]
@@ -953,14 +958,18 @@ class Window(QMainWindow):
         f = dlg.choice
         self.nexus_download(g, mod_id, f["file_id"], replace=replace)
 
-    def nexus_download(self, g, mod_id, file_id, key=None, expires=None, replace=None):
-        """ask Nexus for the download, with the mod's details, and queue it"""
+    def nexus_download(self, g, mod_id, file_id, key=None, expires=None, replace=None, known=None):
+        """ask Nexus for the download, with the mod's details, and queue it
+        known: {"info": mod details, "file": file details} already at hand (saves two requests)"""
         nx = self.nexus
 
         def work():
-            info = nx.mod(g.nexus, mod_id)
-            files = nx.files(g.nexus, mod_id).get("files", [])
-            f = next((x for x in files if x["file_id"] == file_id), {})
+            if known:
+                info, f = known["info"], known["file"]
+            else:
+                info = nx.mod(g.nexus, mod_id)
+                files = nx.files(g.nexus, mod_id).get("files", [])
+                f = next((x for x in files if x["file_id"] == file_id), {})
             urls = nx.download_links(g.nexus, mod_id, file_id, key, expires)
             return info, f, urls
 
@@ -992,6 +1001,9 @@ class Window(QMainWindow):
         tasks.run(work, done, fail)
 
     def handle_nxm(self, url):
+        if "/collections/" in url:
+            self.install_collection(url)
+            return
         link = nexus.parse_nxm(url)
         if not link:
             QMessageBox.warning(self, "Link", f"Armory can't read this link:\n{url}")
@@ -1020,6 +1032,7 @@ class Window(QMainWindow):
         if g is not self.game:
             self.select_game(g.id)
         self.nexus_download(g, link["mod_id"], link["file_id"], link["key"], link["expires"])
+        self.collection_next(link["mod_id"])
 
     def account_changed(self):
         nx = self.nexus
@@ -1386,6 +1399,8 @@ class Window(QMainWindow):
         tm.addAction("Add a tool...", self.add_tool)
         if g.layout.get("data") or g.plugins:
             m.addAction("Import from Mod Organizer 2...", self.import_mo2)
+        if g.nexus:
+            m.addAction("Install a Nexus collection...", lambda: self.install_collection())
         if g.thunderstore:
             m.addSeparator()
             m.addAction("Import an r2modman / Gale profile...", self.import_ts_profile)
@@ -1655,6 +1670,98 @@ class Window(QMainWindow):
                                     f"{', '.join(res['profiles']) or 'none'}. The last one is in use now.")
 
         tasks.run(lambda: mo2.import_instance(st, d), done, lambda msg: QMessageBox.warning(self, "MO2", msg))
+
+    # ---- Nexus collections ----
+    def install_collection(self, text=None):
+        g = self.game
+        if text is None:
+            text, ok = QInputDialog.getText(self, "Install a collection",
+                                            "The collection's address on Nexus Mods (or its code, like ok0vzt):")
+            if not ok or not text.strip():
+                return
+        found = nexus.parse_collection(text, g.nexus if g else "")
+        if not found:
+            QMessageBox.warning(self, "Collection", "Armory can't read that collection address.")
+            return
+        domain, slug = found
+        target = next((x for x in self.games if x.nexus == domain), None)
+        if not target:
+            QMessageBox.information(self, "Add the game first", f"That collection is for “{domain}”, which isn't "
+                                    "in Armory's game list.")
+            return
+        if target is not self.game:
+            self.select_game(target.id)
+        self.say("Reading the collection...")
+        tasks.run(lambda: nexus.collection(domain, slug), lambda c: self.pick_collection(target, c),
+                  lambda m: QMessageBox.warning(self, "Collection", m))
+
+    def pick_collection(self, g, c):
+        st = self.store_for(g)
+        dlg = CollectionDialog(self, c, st)
+        if not dlg.exec():
+            return
+        chosen = dlg.chosen()
+        if not chosen:
+            return
+        if dlg.new_profile.isChecked():
+            name, n = c["name"], 2
+            while name in st.profiles:
+                name = f"{c['name']} ({n})"
+                n += 1
+            st.new_profile(name, copy=False)
+            self.fill_profiles()
+        todo = []
+        for f in chosen:
+            have = [mid for mid, m in st.mods.items() if (m.get("source") or {}).get("type") == "nexus"
+                    and int((m.get("source") or {}).get("mod_id") or 0) == f["mod_id"]
+                    and int((m.get("source") or {}).get("file_id") or 0) == f["file_id"]]
+            if have:
+                st.set_enabled(have[0], True)
+            else:
+                todo.append(f)
+        self.changed()
+        if not todo:
+            self.say("Everything in the collection is installed already")
+            return
+        if self.need_login():
+            return
+        if self.nexus.premium:
+            for f in todo:
+                known = {"info": {"name": f["name"], "version": f["version"], "author": f["author"],
+                                  "summary": f["summary"], "picture_url": f["picture"],
+                                  "contains_adult_content": f["adult"]},
+                         "file": {"name": f["file_name"], "version": f["version"], "category_name": "MAIN"}}
+                self.nexus_download(g, f["mod_id"], f["file_id"], known=known)
+            self.say(f"Downloading {len(todo)} mods from {c['name']}")
+            return
+        # free accounts: Nexus wants a click on each file, so one page at a time
+        self.collection_queue = {"game": g.id, "files": todo, "name": c["name"]}
+        QMessageBox.information(self, "One file at a time",
+                                f"{len(todo)} mods to get. Nexus only lets Premium accounts download without "
+                                "clicking each file, so Armory opens each mod's Files tab in turn: press "
+                                "“Mod Manager Download” on the file it names, and the next one opens when that "
+                                "download starts.")
+        self.collection_open_next()
+
+    def collection_open_next(self):
+        q = getattr(self, "collection_queue", None)
+        if not q or not q["files"]:
+            if q:
+                self.say(f"That was the last mod of {q['name']}")
+            self.collection_queue = None
+            return
+        f = q["files"][0]
+        g = next((x for x in self.games if x.id == q["game"]), None)
+        if not g:
+            return
+        webbrowser.open(nexus.mod_url(g.nexus, f["mod_id"], "files") + f"&file_id={f['file_id']}")
+        self.say(f"{len(q['files'])} left: download “{f['file_name']}” of {f['name']}")
+
+    def collection_next(self, mod_id):
+        q = getattr(self, "collection_queue", None)
+        if q and q["files"] and q["files"][0]["mod_id"] == mod_id:
+            q["files"].pop(0)
+            QTimer.singleShot(1500, self.collection_open_next)
 
     # ---- r2modman / Gale profiles ----
     def import_ts_profile(self):

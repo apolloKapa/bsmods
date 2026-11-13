@@ -204,3 +204,47 @@ def requirements(domain, mod_ids):
                              "external": bool(r.get("externalRequirement"))})
             out[int(node["modId"])] = reqs
     return out
+
+
+COLLECTION_QUERY = """query($slug: String!, $domain: String) {
+  collection(slug: $slug, domainName: $domain) {
+    name summary tileImage { url }
+    latestPublishedRevision { revisionNumber
+      modFiles { optional fileId file { modId name version mod { name summary pictureUrl author adultContent } } } }
+  }
+}"""
+
+
+def parse_collection(text, domain=""):
+    """a collection page address, nxm:// collection link or bare slug -> (domain, slug), or None"""
+    t = text.strip()
+    m = re.search(r"nexusmods\.com/(?:games/)?([a-z0-9]+)/collections/([a-z0-9]+)", t, re.IGNORECASE) or \
+        re.match(r"nxm://([a-z0-9]+)/collections/([a-z0-9]+)", t, re.IGNORECASE)
+    if m:
+        return m.group(1).lower(), m.group(2).lower()
+    if re.fullmatch(r"[a-z0-9]{4,12}", t, re.IGNORECASE) and domain:
+        return domain, t.lower()
+    return None
+
+
+def collection(domain, slug):
+    res = get_json(GQL, data={"query": COLLECTION_QUERY, "variables": {"slug": slug, "domain": domain}},
+                   headers={"Application-Name": "Armory", "Application-Version": VERSION})
+    if res.get("errors"):
+        raise NetError(res["errors"][0].get("message", "Couldn't read the collection"))
+    c = res["data"]["collection"]
+    if not c or not c.get("latestPublishedRevision"):
+        raise NetError("That collection has no published revision")
+    rev = c["latestPublishedRevision"]
+    files = []
+    for f in rev.get("modFiles") or []:
+        info = f.get("file") or {}
+        mod = info.get("mod") or {}
+        files.append({"mod_id": int(info.get("modId") or 0), "file_id": int(f.get("fileId") or 0),
+                      "file_name": info.get("name") or "", "version": info.get("version") or "",
+                      "name": mod.get("name") or info.get("name") or "", "summary": mod.get("summary") or "",
+                      "picture": mod.get("pictureUrl") or "", "author": mod.get("author") or "",
+                      "adult": bool(mod.get("adultContent")), "optional": bool(f.get("optional"))})
+    return {"name": c.get("name") or slug, "summary": c.get("summary") or "",
+            "image": (c.get("tileImage") or {}).get("url", ""), "revision": rev.get("revisionNumber"),
+            "files": [f for f in files if f["mod_id"] and f["file_id"]], "domain": domain, "slug": slug}
