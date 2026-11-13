@@ -20,6 +20,7 @@ class NetError(Exception):
 
 
 def request(url, data=None, headers=None, method=None, timeout=30):
+    check_url(url)
     h = {"User-Agent": UA, "Accept-Encoding": "gzip"}
     h.update(headers or {})
     body = None
@@ -61,8 +62,14 @@ def get_json(url, **kw):
         raise NetError("The server sent something that isn't JSON") from None
 
 
+def check_url(url):
+    if not url.lower().startswith("https://") and not url.lower().startswith("http://"):
+        raise NetError(f"Not a web address: {url[:80]}")
+
+
 def download(url, dest, progress=None, cancelled=lambda: False, headers=None):
     """download to dest (through dest.part); progress(done, total) every chunk"""
+    check_url(url)
     h = {"User-Agent": UA}
     h.update(headers or {})
     part = dest + ".part"
@@ -102,8 +109,10 @@ def cached_image(url):
     """the local file for an image URL, downloading it once"""
     if not url:
         return None
-    if os.path.isfile(url):
-        return url
+    if os.path.isabs(url):
+        return url if os.path.isfile(url) else None
+    if not url.lower().startswith(("https://", "http://")):
+        return None
     ext = os.path.splitext(urllib.parse.urlparse(url).path)[1][:5] or ".img"
     path = os.path.join(CACHE, "img", hashlib.sha1(url.encode()).hexdigest() + ext)
     if os.path.isfile(path):

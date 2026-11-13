@@ -1,7 +1,7 @@
 """Where Armory keeps things, and small JSON helpers.
 
 ~/.config/armory/config.json     settings (window, view, deploy method, which games are listed)
-~/.config/armory/nexus.json      the Nexus Mods API key (mode 600)
+the desktop keyring (or ~/.config/armory/nexus.json, mode 600)  the Nexus login
 ~/.local/share/armory/games/<id>  per game: staged mods, profiles, what is deployed, backups
 ~/.local/share/armory/downloads   downloaded archives (kept so a mod can be reinstalled)
 ~/.cache/armory                   images and Thunderstore listings
@@ -65,17 +65,14 @@ def save_conf(**changes):
 
 
 def nexus_key():
-    return read_json(SECRETS, {}).get("apikey", "")
+    from . import vault
+    return vault.get("apikey")
 
 
 def set_nexus_key(key):
-    if key:
-        write_json(SECRETS, {"apikey": key}, private=True)
-    else:
-        try:
-            os.unlink(SECRETS)
-        except OSError:
-            pass
+    """where it was kept: "keyring" or "file" """
+    from . import vault
+    return vault.put("apikey", key)
 
 
 def slug(text, fallback="mod"):

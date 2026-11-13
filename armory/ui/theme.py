@@ -198,6 +198,8 @@ def placeholder(name, w, h, r=10):
 
 def label(text, name=None, wrap=False):
     l_ = QLabel(text)
+    # names and summaries come from mod sites: never read them as HTML
+    l_.setTextFormat(Qt.TextFormat.PlainText)
     if name:
         l_.setObjectName(name)
     l_.setWordWrap(wrap)
@@ -205,6 +207,19 @@ def label(text, name=None, wrap=False):
         # a pill keeps its own height instead of filling the row
         l_.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
     return l_
+
+
+def open_web(url):
+    """open a web page from a mod site's data: only https/http, never other kinds of links"""
+    import webbrowser
+    if isinstance(url, str) and url.lower().startswith(("https://", "http://")):
+        webbrowser.open(url)
+
+
+def tip(text):
+    """a tooltip for text from a mod site, escaped so it can't be HTML"""
+    import html
+    return "<p style='white-space:pre-wrap'>" + html.escape(text or "") + "</p>" if text else ""
 
 
 def button(text, slot=None, name=None, tip=None):

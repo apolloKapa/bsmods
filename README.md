@@ -41,20 +41,35 @@ make it executable and run it. Or, from a checkout (needs `python3`, and `bsdtar
 
 ## Logging in to Nexus Mods
 
-Nexus only lets apps it has registered use one-click sign-in, so Armory uses your **personal API
-key**: Settings → Nexus Mods → Open the API keys page, copy the key at the bottom, paste it in.
-It's stored in `~/.config/armory/nexus.json`, readable only by you.
+Armory has Nexus's OAuth sign-in built in (browser sign-in with PKCE, the token kept in your desktop
+keyring), but Nexus has to register an app before it can use it. Until Armory is registered, use
+your **personal API key**: Settings → Nexus Mods → Open the API keys page, copy the key at the
+bottom, paste it in. It goes in your desktop keyring (Secret Service), or, without one, in
+`~/.config/armory/nexus.json`, readable only by you.
 
 For the website's mod manager buttons to reach Armory, go to **Settings → Links** and press
 **Open them with Armory** for Nexus Mods (`nxm://`) and/or Thunderstore (`ror2mm://`). Armory never
 takes these over by itself: if another mod manager opens them now, it stays that way until you ask.
+
+## Security
+
+- Archives are unpacked with bsdtar, which refuses absolute paths and `..`; the 7-Zip fallback is
+  checked for those first. Links inside archives are dropped, and FOMOD installers can't reach
+  files outside their own mod.
+- The Nexus key or token never goes anywhere but `api.nexusmods.com` / `users.nexusmods.com`, over
+  HTTPS. Downloads and pictures are only fetched from http(s) addresses.
+- nxm:// links made for another Nexus account are refused. Thunderstore links ask before installing,
+  since any web page can open them.
+- The socket a second Armory uses to hand over links only talks to your own user's processes.
+- Text from mod sites is shown as plain text.
+- Mods themselves are programs (DLLs, scripts): only install ones you trust.
 
 ## Where things are
 
 | | |
 |---|---|
 | `~/.config/armory/config.json` | settings, the games you added, folders you picked |
-| `~/.config/armory/nexus.json` | your Nexus API key |
+| keyring, or `~/.config/armory/nexus.json` | your Nexus login |
 | `~/.local/share/armory/games/<game>/mods/` | each mod, laid out like the game folder |
 | `~/.local/share/armory/games/<game>/profiles.json` | profiles: on/off, order, plugins |
 | `~/.local/share/armory/games/<game>/deployed.json` | every file Armory put in the game |

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QFrame, QGraphicsOpacityEffect, 
 from .. import config, nexus, thunderstore
 from ..config import human
 from . import tasks
-from .theme import Segments, Switch, button, label, menu_button
+from .theme import Segments, Switch, button, label, menu_button, open_web, tip
 
 TAB_NAMES = {"mods": "Mods", "nsfw": "NSFW", "hidden": "Hidden"}
 
@@ -76,7 +76,7 @@ class ModCard(QFrame):
         if m.get("summary"):
             d = label(m["summary"].replace("\n", " "), "muted")
             d.setText(QFontMetrics(d.font()).elidedText(d.text(), Qt.TextElideMode.ElideRight, 520))
-            d.setToolTip(m["summary"])
+            d.setToolTip(tip(m["summary"]))
             text.addWidget(d)
         chips = QHBoxLayout()
         chips.setSpacing(6)
@@ -90,12 +90,12 @@ class ModCard(QFrame):
             names = lambda d_: ", ".join(store.mods[k].get("name", k) for k in d_)
             if c["wins"]:
                 w = label(f"Wins {sum(c['wins'].values())}", "badgeWin")
-                w.setToolTip("Replaces files of: " + names(c["wins"]))
+                w.setToolTip(tip("Replaces files of: " + names(c["wins"])))
                 chips.addWidget(w)
             if c["loses"]:
                 l_ = label(f"Loses {sum(c['loses'].values())}", "badgeOld")
-                l_.setToolTip("Some of its files are replaced by: " + names(c["loses"]) +
-                              "\nMove it lower in the list to win them")
+                l_.setToolTip(tip("Some of its files are replaced by: " + names(c["loses"]) +
+                                  "\nMove it lower in the list to win them"))
                 chips.addWidget(l_)
         if store.is_nsfw(m):
             chips.addWidget(label("NSFW", "badgeNsfw"))
@@ -129,8 +129,8 @@ class ModTile(QFrame):
         name = label("")
         name.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {'#e8e8ef' if m['enabled'] else '#7a7a88'};")
         name.setText(QFontMetrics(name.font()).elidedText(m.get("name", ""), Qt.TextElideMode.ElideRight, self.W - 40))
-        name.setToolTip(m.get("name", "") + (f"\nby {m['author']}" if m.get("author") else "") +
-                        (f"\n\n{m['summary']}" if m.get("summary") else ""))
+        name.setToolTip(tip(m.get("name", "") + (f"\nby {m['author']}" if m.get("author") else "") +
+                        (f"\n\n{m['summary']}" if m.get("summary") else "")))
         lay.addWidget(name)
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -139,7 +139,7 @@ class ModTile(QFrame):
             row.addWidget(label("v" + str(m["version"]).lstrip("vV"), "badge"), 0, mid)
         if m.get("update"):
             u = label("Update", "badgeOk")
-            u.setToolTip(f"v{m['update'].get('version')} is out: ⋯ → Update")
+            u.setToolTip(tip(f"v{m['update'].get('version')} is out: ⋯ → Update"))
             row.addWidget(u, 0, mid)
         if store.is_nsfw(m):
             row.addWidget(label("NSFW", "badgeNsfw"), 0, mid)
@@ -170,7 +170,7 @@ def mod_menu(page, m, parent):
             menu.addAction("Remove endorsement" if endorsed else "Endorse", lambda: w.endorse(m["id"], not endorsed))
     elif src.get("type") == "thunderstore" and src.get("full_name"):
         url = src.get("url") or thunderstore.package_url(store.game.thunderstore, *src["full_name"].split("-", 1))
-        menu.addAction("Open on Thunderstore", lambda: QDesktopServices.openUrl(QUrl(url)))
+        menu.addAction("Open on Thunderstore", lambda: open_web(url))
     if m.get("update"):
         menu.addAction(f"Update to v{m['update'].get('version')}", lambda: w.update_mod(m["id"]))
     menu.addAction("Check for an update", lambda: w.check_updates([m["id"]]))

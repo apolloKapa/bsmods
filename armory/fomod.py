@@ -191,6 +191,11 @@ class Fomod:
             if hit is None:
                 return None
             cur = os.path.join(cur, hit)
+        # "../" in an installer must not reach files outside the mod
+        base = os.path.realpath(self.base)
+        real = os.path.realpath(cur)
+        if real != base and not real.startswith(base + os.sep):
+            return None
         return cur
 
     def image(self, rel):

@@ -47,6 +47,9 @@ def extract(src, dest):
             continue
         if tool == "unrar" and not src.lower().endswith(".rar"):
             continue
+        if tool in ("7z", "7zz") and not safe_7z_listing(tool, src):
+            tried.append(f"{tool}: the archive has paths outside its own folder")
+            continue
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode == 0:
             fix_permissions(dest)
@@ -61,9 +64,29 @@ def extract(src, dest):
     raise LayoutError(f"Couldn't unpack {os.path.basename(src)} ({'; '.join(map(str, tried))})")
 
 
+def safe_7z_listing(tool, src):
+    """no absolute paths or ".." in an archive (bsdtar refuses those by itself)"""
+    r = subprocess.run([tool, "l", "-slt", "-ba", src], capture_output=True, text=True)
+    if r.returncode != 0:
+        return True     # it can't read it either; the unpack will fail with its own message
+    for line in r.stdout.splitlines():
+        if line.startswith("Path = "):
+            p = line[7:].replace("\\", "/")
+            if p.startswith("/") or re.match(r"^[A-Za-z]:", p) or ".." in p.split("/"):
+                return False
+    return True
+
+
 def fix_permissions(root):
-    """archives made on Windows sometimes unpack with folders we can't enter"""
+    """archives made on Windows sometimes unpack with folders we can't enter; links in an archive
+    are removed (one could point at your own files and get them copied into a game)"""
     for d, dirs, files in os.walk(root):
+        for n in list(dirs) + list(files):
+            p = os.path.join(d, n)
+            if os.path.islink(p):
+                os.unlink(p)
+                if n in dirs:
+                    dirs.remove(n)
         for n in dirs:
             p = os.path.join(d, n)
             try:
@@ -100,6 +123,8 @@ def files_under(folder, ignore_top=()):
             if f.lower() in JUNK:
                 continue
             p = os.path.join(d, f)
+            if os.path.islink(p):
+                continue
             rel = os.path.relpath(p, folder)
             if d == folder and matches(f, ignore_top):
                 continue

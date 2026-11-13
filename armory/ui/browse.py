@@ -1,5 +1,4 @@
 """Browse: find mods on Nexus Mods or Thunderstore for the game and install them."""
-import webbrowser
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFontMetrics
@@ -9,7 +8,7 @@ from PyQt6.QtWidgets import (QComboBox, QFrame, QGridLayout, QHBoxLayout, QLineE
 from .. import config, nexus, thunderstore
 from ..config import short_count
 from . import tasks
-from .theme import Segments, button, label
+from .theme import Segments, button, label, open_web, tip
 
 PAGE = 30
 
@@ -32,7 +31,7 @@ class ResultTile(QFrame):
         name = label("")
         name.setStyleSheet("font-size: 14px; font-weight: 700;")
         name.setText(QFontMetrics(name.font()).elidedText(item["name"], Qt.TextElideMode.ElideRight, w))
-        name.setToolTip(item["name"])
+        name.setToolTip(tip(item["name"]))
         lay.addWidget(name)
         by = label("")
         by.setObjectName("small")
@@ -69,7 +68,7 @@ class ResultTile(QFrame):
         summ.setText("\n".join(out))
         summ.setFixedHeight(fm.lineSpacing() * 3 + 2)
         summ.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        summ.setToolTip(text)
+        summ.setToolTip(tip(text))
         lay.addWidget(summ)
         stats = QHBoxLayout()
         stats.setSpacing(6)
@@ -93,7 +92,7 @@ class ResultTile(QFrame):
             if page.source == "nexus" and not page.window.nexus.premium:
                 b.setToolTip("Opens the mod's Files tab: press “Mod Manager Download” there and Armory installs it")
         row.addWidget(b, 1)
-        row.addWidget(button("Page", lambda: webbrowser.open(item["url"]), tip="Open its page in your browser"))
+        row.addWidget(button("Page", lambda: open_web(item["url"]), tip="Open its page in your browser"))
         lay.addLayout(row)
         self.setFixedHeight(self.sizeHint().height())
 

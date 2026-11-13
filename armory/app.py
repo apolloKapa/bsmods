@@ -3,6 +3,7 @@ hands its arguments to the running one."""
 import os
 import shutil
 import socket
+import struct
 import sys
 import threading
 
@@ -17,11 +18,19 @@ from .ui import theme
 SOCK = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", f"{links.SOCKET}.sock")
 
 
+def peer_uid(conn):
+    creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+    return struct.unpack("3i", creds)[1]
+
+
 def send_to_running(args):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(1.5)
             s.connect(SOCK)
+            if peer_uid(s) != os.getuid():
+                # someone else's socket: links (with their download keys) aren't handed to it
+                return False
             s.sendall("\0".join(args).encode())
         return True
     except OSError:
@@ -49,6 +58,11 @@ class Listener(QObject):
             except OSError:
                 return
             with conn:
+                try:
+                    if peer_uid(conn) != os.getuid():
+                        continue
+                except OSError:
+                    continue
                 conn.settimeout(3)
                 buf = b""
                 try:
@@ -79,6 +93,11 @@ def main():
     app.setApplicationName("armory")
     app.setDesktopFileName("armory")
     app.setWindowIcon(QIcon(theme.ICON))
+    from . import vault
+    try:
+        vault.migrate()
+    except OSError:
+        pass
     theme.apply(app)
     from .ui.window import Window
     w = Window()

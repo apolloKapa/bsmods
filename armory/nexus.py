@@ -10,7 +10,7 @@ import json
 import re
 import urllib.parse
 
-from . import VERSION, config
+from . import VERSION, config, oauth
 from .net import NetError, get_json, request
 
 API = "https://api.nexusmods.com"
@@ -46,18 +46,23 @@ class Nexus:
 
     @property
     def logged_in(self):
-        return bool(self.key)
+        return bool(self.key) or oauth.signed_in()
 
     @property
     def premium(self):
         return bool(self.user and (self.user.get("is_premium") or self.user.get("is_premium?")))
 
     def _headers(self):
-        return {"apikey": self.key, "Application-Name": "Armory", "Application-Version": VERSION,
-                "Accept": "application/json"}
+        h = {"Application-Name": "Armory", "Application-Version": VERSION, "Accept": "application/json"}
+        token = oauth.access_token() if oauth.signed_in() else ""
+        if token:
+            h["Authorization"] = f"Bearer {token}"
+        else:
+            h["apikey"] = self.key
+        return h
 
     def get(self, path, **params):
-        if not self.key:
+        if not self.logged_in:
             raise NetError("Log in to Nexus Mods first (Settings → Nexus Mods)", 401)
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
         raw, headers = request(url, headers=self._headers())
@@ -67,7 +72,7 @@ class Nexus:
         return json.loads(raw)
 
     def post(self, path, data):
-        if not self.key:
+        if not self.logged_in:
             raise NetError("Log in to Nexus Mods first", 401)
         raw, _ = request(API + path, data=urllib.parse.urlencode(data), method="POST",
                          headers=dict(self._headers(), **{"Content-Type": "application/x-www-form-urlencoded"}))

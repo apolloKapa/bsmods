@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileD
                              QScrollArea, QSpinBox, QStackedWidget, QTextBrowser, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QWidget)
 
-from .. import config, games, links, nexus
+from .. import config, games, links, nexus, oauth
 from ..config import human
 from . import tasks
 from .theme import Segments, button, label, rounded
@@ -49,6 +49,10 @@ class SettingsDialog(QDialog):
         v.addLayout(row)
         self.show_tab(tab)
 
+    def done(self, r):
+        self.oauth_stop()
+        super().done(r)
+
     def show_tab(self, key):
         self.segs.set(key)
         self.stack.setCurrentIndex(self.pages[key])
@@ -79,15 +83,38 @@ class SettingsDialog(QDialog):
         b.addLayout(top)
         v.addWidget(box)
 
+        self.oauth_box = frame()
+        ob = QVBoxLayout(self.oauth_box)
+        ob.setContentsMargins(16, 14, 16, 14)
+        ob.setSpacing(10)
+        ob.addWidget(label("Sign in with your Nexus Mods account", "h2"))
+        ob.addWidget(label("Opens the Nexus sign-in page in your browser. Armory never sees your password; "
+                           "Nexus gives it a token that's kept in your desktop's keyring.", "muted", True))
+        orow = QHBoxLayout()
+        self.oauth_btn = button("Sign in with Nexus Mods", self.oauth_login, "primary")
+        orow.addWidget(self.oauth_btn)
+        self.oauth_cancel = button("Cancel", self.oauth_stop)
+        self.oauth_cancel.hide()
+        orow.addWidget(self.oauth_cancel)
+        orow.addStretch(1)
+        ob.addLayout(orow)
+        self.oauth_msg = label("", "muted", True)
+        ob.addWidget(self.oauth_msg)
+        v.addWidget(self.oauth_box)
+        self.oauth_box.setVisible(oauth.available())
+
         self.login_box = frame()
         lb = QVBoxLayout(self.login_box)
         lb.setContentsMargins(16, 14, 16, 14)
         lb.setSpacing(10)
-        lb.addWidget(label("Log in with your personal API key", "h2"))
-        lb.addWidget(label("Nexus Mods only lets apps it has registered use one-click sign-in, so Armory uses "
-                           "the personal API key from your account instead. Open the API keys page, copy your "
-                           "Personal API Key at the bottom, and paste it here. It's kept in "
-                           "~/.config/armory/nexus.json, readable only by you.", "muted", True))
+        lb.addWidget(label("Or log in with your personal API key" if oauth.available()
+                           else "Log in with your personal API key", "h2"))
+        lb.addWidget(label("Open the API keys page, copy your Personal API Key at the bottom, and paste it here. "
+                           "It's kept in your desktop's keyring (or, without one, in a file only you can read). "
+                           "Anyone with this key can use your Nexus account through the API: don't share it, "
+                           "and you can make a new one on that page at any time." +
+                           ("" if oauth.available() else "\n\nOne-click sign-in comes once Nexus Mods has "
+                            "registered Armory as an app."), "muted", True))
         row = QHBoxLayout()
         self.key_edit = QLineEdit()
         self.key_edit.setPlaceholderText("Personal API key")
@@ -121,19 +148,23 @@ class SettingsDialog(QDialog):
     def refresh_account(self):
         nx = self.window.nexus
         u = nx.user
+        how = "signed in through Nexus" if oauth.signed_in() else "API key"
         if nx.logged_in and u:
             self.who.setText(u.get("name", "Logged in"))
             kind = "Premium" if nx.premium else "Supporter" if u.get("is_supporter") else "Free account"
-            self.who_sub.setText(f"{kind}  ·  {u.get('email', '')}".strip(" ·"))
+            self.who_sub.setText(f"{kind}  ·  {how}")
             tasks.set_picture(self.avatar, u.get("profile_url"), 48, 48, u.get("name", ""), 24)
             self.logout_btn.show()
             self.login_box.hide()
+            self.oauth_box.hide()
         elif nx.logged_in:
-            self.who.setText("Checking your key...")
+            self.who.setText("Checking your login...")
             self.who_sub.setText("")
             self.logout_btn.show()
             self.login_box.hide()
+            self.oauth_box.hide()
         else:
+            self.oauth_box.setVisible(oauth.available())
             self.who.setText("Not logged in")
             self.who_sub.setText("Log in to download with the Mod Manager button, check for updates and endorse mods.")
             tasks.set_picture(self.avatar, None, 48, 48, "?", 24)
@@ -149,10 +180,12 @@ class SettingsDialog(QDialog):
         nx = nexus.Nexus(key)
 
         def done(user):
-            config.set_nexus_key(key)
+            where = config.set_nexus_key(key)
             self.window.set_nexus(nx)
             self.key_edit.clear()
-            self.login_msg.setText("")
+            self.login_msg.setText("" if where == "keyring" else
+                                   "No desktop keyring found: the key is in ~/.config/armory/nexus.json (only you "
+                                   "can read it).")
             self.login_btn.setEnabled(True)
             self.refresh_account()
 
@@ -164,8 +197,37 @@ class SettingsDialog(QDialog):
 
     def logout(self):
         config.set_nexus_key("")
+        tasks.run(oauth.logout)
         self.window.set_nexus(nexus.Nexus(""))
         self.refresh_account()
+
+    def oauth_login(self):
+        import webbrowser as wb
+        run, self._oauth_cancel = oauth.threading_login(wb.open)
+        self.oauth_btn.setEnabled(False)
+        self.oauth_cancel.show()
+        self.oauth_msg.setText("Finish signing in in your browser...")
+
+        def done(_tokens):
+            self.oauth_btn.setEnabled(True)
+            self.oauth_cancel.hide()
+            self.oauth_msg.setText("")
+            nx = nexus.Nexus("")
+            self.window.set_nexus(nx)
+            tasks.run(nx.validate, lambda _: (self.window.account_changed(), self.refresh_account()),
+                      lambda m: self.oauth_msg.setText("Signed in, but Nexus didn't answer: " + m))
+            self.refresh_account()
+
+        def fail(msg):
+            self.oauth_btn.setEnabled(True)
+            self.oauth_cancel.hide()
+            self.oauth_msg.setText(msg)
+
+        tasks.run(run, done, fail)
+
+    def oauth_stop(self):
+        if getattr(self, "_oauth_cancel", None):
+            self._oauth_cancel()
 
     # -- links --
     def build_links(self, w):

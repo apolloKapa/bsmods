@@ -805,6 +805,11 @@ class Window(QMainWindow):
             return
         if self.need_login():
             return
+        me = str((self.nexus.user or {}).get("user_id") or "")
+        if link["user_id"] and me and link["user_id"] != me:
+            QMessageBox.warning(self, "Not your link", "That download link was made for another Nexus account, "
+                                "so Armory won't use it. Press the button on Nexus yourself while logged in.")
+            return
         self.raise_()
         self.activateWindow()
         if g is not self.game:
@@ -888,6 +893,15 @@ class Window(QMainWindow):
         g = g or cands[0]
         self.raise_()
         self.activateWindow()
+        # any web page can open these links: nothing is installed without a yes
+        box = QMessageBox(self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setWindowTitle("Install from Thunderstore?")
+        box.setText(f"Install {link['name']} by {link['owner']} for {g.name}? Mods it needs come with it.\n\n"
+                    "Only say yes if you just pressed an install button on thunderstore.io.")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if box.exec() != QMessageBox.StandardButton.Yes:
+            return
         if g is not self.game:
             self.select_game(g.id)
         self.thunderstore_install(g, link["full"])
