@@ -44,6 +44,8 @@ It started as BS Mods, a Blade & Sorcery mod manager, and now handles any game.
   `install`, `play`, `version` (see `armory help`).
 - **Updates**: Armory checks GitHub once a day for a new release and can update its AppImage, checked
   against the release's SHA256SUMS. Nothing about you or your mods is ever sent anywhere.
+- **Animations**: games and pages cross-fade, game art blends from one game to the next, the tab line
+  and the sidebar highlight slide, toasts rise in (Settings → Appearance → Animations to turn them off).
 - **Themes**: Armory, Midnight, Violet, Ember, Forest, Rose, Frost, OLED black and Light, any accent
   colour you like, and the game's artwork behind the page (Settings → Appearance; changes at once).
 - NSFW and hidden tabs, list or grid view, a download queue, drag and drop installs.

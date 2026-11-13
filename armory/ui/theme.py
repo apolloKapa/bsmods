@@ -2,7 +2,7 @@
 import os
 import re
 
-from PyQt6.QtCore import QPropertyAnimation, QRectF, Qt, pyqtProperty
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRectF, Qt, pyqtProperty
 from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap
 from PyQt6.QtWidgets import (QAbstractButton, QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton,
                              QSizePolicy, QToolButton)
@@ -132,10 +132,11 @@ QPushButton#seg:hover:!checked {{ color: {TEXT}; }}
 QPushButton#tab {{ background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0;
                    padding: 10px 4px 9px 4px; margin-right: 18px; color: {MUTED}; font-size: 14px; font-weight: 600; }}
 QPushButton#tab:hover {{ color: {TEXT}; }}
-QPushButton#tab:checked {{ color: {TEXT}; border-bottom: 2px solid {ACCENT}; }}
+QPushButton#tab:checked {{ color: {TEXT}; }}
 QPushButton#gameRow {{ text-align: left; border: none; background: transparent; border-radius: 10px; padding: 0; }}
 QPushButton#gameRow:hover {{ background: rgba({FG},0.04); }}
-QPushButton#gameRow:checked {{ background: rgba({ACCENT_RGB},0.11); }}
+QPushButton#gameRow:checked {{ background: transparent; }}
+QFrame#pill {{ background: rgba({ACCENT_RGB},0.13); border: 1px solid rgba({ACCENT_RGB},0.18); border-radius: 10px; }}
 QPushButton#ghost {{ background: transparent; border: 1px dashed rgba({FG},0.12); color: {MUTED}; }}
 QPushButton#ghost:hover {{ border: 1px dashed rgba({ACCENT_RGB},0.6); color: {TEXT}; background: rgba({ACCENT_RGB},0.05); }}
 QToolButton {{ background: transparent; color: {MUTED}; border: none; border-radius: 8px; padding: 4px 8px; font-size: 16px; }}
@@ -444,12 +445,58 @@ class Tabs(QFrame):
         self.trail.setSpacing(8)
         lay.addStretch(1)
         lay.addLayout(self.trail)
+        # the accent line under the open tab, drawn here so it can slide between tabs
+        self.line = QRectF()
+        self.key = None
         if items:
             self.set(current if current in self.buttons else items[0][0])
 
+    def target(self, key):
+        b = self.buttons.get(key)
+        if b is None or not b.isVisible():
+            return QRectF()
+        g = b.geometry()
+        pad = 4
+        return QRectF(g.left() + pad - 4, g.bottom() - 1, g.width() - 2 * pad - 10, 2.5)
+
     def set(self, key):
-        if key in self.buttons:
-            self.buttons[key].setChecked(True)
+        if key not in self.buttons:
+            return
+        self.buttons[key].setChecked(True)
+        moved = key != self.key
+        self.key = key
+        end = self.target(key)
+        if end.isNull():
+            return
+        if not moved or self.line.isNull() or not self.isVisible():
+            self.line = end
+            self.update()
+            return
+        from .motion import tween
+        tween(self, QRectF(self.line), end, self._move, 260)
+
+    def _move(self, r):
+        self.line = QRectF(r)
+        self.update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.line = self.target(self.key) if self.key else QRectF()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._move(self.target(self.key)) if self.key else None)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self.line.isNull():
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(ACCENT))
+        p.drawRoundedRect(self.line, 1.2, 1.2)
 
     def set_text(self, key, text):
         if key in self.buttons:
@@ -458,6 +505,9 @@ class Tabs(QFrame):
     def show_key(self, key, visible):
         if key in self.buttons:
             self.buttons[key].setVisible(visible)
+            from PyQt6.QtCore import QTimer
+            # the other tabs move: the line follows once the layout has settled
+            QTimer.singleShot(0, lambda: self._move(self.target(self.key)) if self.key else None)
 
 
 class Toast(QFrame):
@@ -490,19 +540,37 @@ class Toast(QFrame):
         self.hide()
 
     def say(self, text, ms=4200):
+        from .motion import enabled
+        was = self.isVisible()
         self.text.setText(text)
         self.adjustSize()
         self.place()
         self.raise_()
         self.show()
         self.fade.stop()
-        self.fade.setStartValue(self.fx.opacity() if self.isVisible() else 0.0)
-        self.fade.setEndValue(1.0)
-        self.fade.start()
+        if enabled():
+            self.fade.setStartValue(self.fx.opacity() if was else 0.0)
+            self.fade.setEndValue(1.0)
+            self.fade.start()
+            if not was:
+                # rise a little as it appears
+                end = self.pos()
+                self.rise = QPropertyAnimation(self, b"pos", self)
+                self.rise.setDuration(240)
+                self.rise.setStartValue(end + QPoint(0, 14))
+                self.rise.setEndValue(end)
+                self.rise.setEasingCurve(QEasingCurve.Type.OutCubic)
+                self.rise.start()
+        else:
+            self.fx.setOpacity(1.0)
         self.timer.start(ms)
 
     def dismiss(self):
+        from .motion import enabled
         self.fade.stop()
+        if not enabled():
+            self.hide()
+            return
         self.fade.setStartValue(self.fx.opacity())
         self.fade.setEndValue(0.0)
         self.fade.start()

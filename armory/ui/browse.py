@@ -257,9 +257,16 @@ class BrowsePage(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if self.results and (self.columns() != self.cols or abs(self.tile_width() - getattr(self, "tw", 0)) > 6):
-            QTimer.singleShot(0, self.show_results)
+            QTimer.singleShot(0, lambda: self.show_results(fade=False))
 
-    def show_results(self):
+    def show_results(self, fade=True):
+        from .motion import crossfade
+        if fade and self.scroll.widget() is not None and self.isVisible():
+            crossfade(self.scroll, lambda: self._show_results(), duration=200)
+        else:
+            self._show_results()
+
+    def _show_results(self):
         where = "Nexus Mods" if self.source == "nexus" else "Thunderstore"
         self.status.setText(f"{self.total} mods on {where}" + (f", showing {len(self.results)}"
                                                                if self.total > len(self.results) else ""))

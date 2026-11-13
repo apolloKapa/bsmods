@@ -313,7 +313,8 @@ class ModsPage(QWidget):
     def set_tab(self, t):
         self.tab = t
         self.tabs.set(t)
-        self.refresh()
+        from .motion import crossfade
+        crossfade(self.stack, self.refresh, duration=180)
 
     def set_mode(self, mode):
         self.show_mode = mode
@@ -323,7 +324,8 @@ class ModsPage(QWidget):
         self.view = view
         self.views.set(view)
         config.save_conf(view=view)
-        self.refresh()
+        from .motion import crossfade
+        crossfade(self.stack, self.refresh, duration=200)
 
     def tab_of(self, m):
         return "hidden" if m.get("hidden") else "nsfw" if self.store.is_nsfw(m) else "mods"

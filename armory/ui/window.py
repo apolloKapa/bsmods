@@ -6,7 +6,7 @@ import tempfile
 import time
 import webbrowser
 
-from PyQt6.QtCore import QFileSystemWatcher, QRectF, Qt, QTimer, QUrl
+from PyQt6.QtCore import QFileSystemWatcher, QPropertyAnimation, QRectF, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
@@ -16,7 +16,7 @@ from .. import VERSION, config, games, install, layout, mo2, net, nexus, saves, 
 from ..config import DATA, HOME
 from ..fomod import Fomod
 from ..store import DeployError, Store, resolve_case, staged_files
-from . import tasks
+from . import motion, tasks
 from .browse import BrowsePage
 from .dialogs import (AddGameDialog, CollectionDialog, FomodWizard, ImportProfileDialog, ModDetailsDialog,
                       NexusFilesDialog, SettingsDialog)
@@ -33,15 +33,27 @@ OLD_BSMODS = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, 
 
 
 class Ambient(QWidget):
-    """the main area: the game's art, blurred and dark, glowing behind the top of the page"""
+    """the main area: the game's art, blurred and dark, glowing behind the top of the page;
+    switching games blends from the old art to the new"""
     def __init__(self):
         super().__init__()
         self.src = QPixmap()
         self.cache = QPixmap()
+        self.old = QPixmap()
+        self.mix = 1.0
 
     def set_image(self, path):
-        self.src = QPixmap(path) if path else QPixmap()
+        new = QPixmap(path) if path else QPixmap()
+        if new.cacheKey() == self.src.cacheKey() and not new.isNull():
+            return
+        self.old = self.cache if not self.cache.isNull() else QPixmap()
+        self.src = new
         self.cache = QPixmap()
+        self.mix = 0.0
+        motion.tween(self, 0.0, 1.0, self._blend, 420, done=lambda: setattr(self, "old", QPixmap()))
+
+    def _blend(self, v):
+        self.mix = float(v)
         self.update()
 
     def resizeEvent(self, e):
@@ -52,13 +64,17 @@ class Ambient(QWidget):
         p = QPainter(self)
         bg = QColor(T.BG)
         p.fillRect(self.rect(), bg)
-        if self.src.isNull() or not config.get("ambient", True):
+        if not config.get("ambient", True):
             return
         h = min(self.height(), 520)
-        if self.cache.isNull() or self.cache.width() < self.width():
+        if not self.src.isNull() and (self.cache.isNull() or self.cache.width() < self.width()):
             self.cache = blurred(self.src, self.width(), h)
-        p.setOpacity(0.30 if T.LIGHT else 0.42)
-        p.drawPixmap(0, 0, self.cache, (self.cache.width() - self.width()) // 2, 0, self.width(), h)
+        strength = 0.30 if T.LIGHT else 0.42
+        for pix, amount in ((self.old, 1.0 - self.mix), (self.cache, self.mix)):
+            if pix.isNull() or amount <= 0:
+                continue
+            p.setOpacity(strength * amount)
+            p.drawPixmap(0, 0, pix, max(0, (pix.width() - self.width()) // 2), 0, self.width(), h)
         p.setOpacity(1)
         fade = QLinearGradient(0, 0, 0, h)
         for at, alpha in ((0, 90), (0.55, 200), (1, 255)):
@@ -69,15 +85,53 @@ class Ambient(QWidget):
 
 
 class Hero(QWidget):
-    """the game's banner from Steam behind its logo (or name) and the Play button"""
+    """the game's banner from Steam behind its logo (or name) and the Play button; switching games
+    blends to the new banner, which settles from a slight zoom"""
     def __init__(self):
         super().__init__()
         self.pix = QPixmap()
+        self.old = QPixmap()
+        self.mix = 1.0
         self.setFixedHeight(230)
 
     def set_image(self, path):
-        self.pix = QPixmap(path) if path else QPixmap()
+        new = QPixmap(path) if path else QPixmap()
+        self.old = self.pix
+        self.pix = new
+        self.mix = 0.0
+        # only the two pictures on screen keep a scaled copy
+        live = {id(self.old), id(self.pix)}
+        for d in ("_scaled", "_key"):
+            setattr(self, d, {k: v for k, v in getattr(self, d, {}).items() if k in live})
+        motion.tween(self, 0.0, 1.0, self._blend, 460, done=lambda: setattr(self, "old", QPixmap()))
+
+    def _blend(self, v):
+        self.mix = float(v)
         self.update()
+
+    def _draw(self, p, pix, zoom):
+        if pix.isNull():
+            g = QLinearGradient(0, 0, self.width(), self.height())
+            g.setColorAt(0, QColor(T.ACCENT).darker(420))
+            g.setColorAt(1, QColor("#15151b"))
+            p.fillRect(self.rect(), g)
+            return
+        key = (pix.cacheKey(), self.width(), self.height())
+        if getattr(self, "_key", {}).get(id(pix)) != key:
+            # scaled once per picture and size; the zoom is the painter's
+            self._scaled = getattr(self, "_scaled", {})
+            self._scaled[id(pix)] = pix.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                               Qt.TransformationMode.SmoothTransformation)
+            self._key = getattr(self, "_key", {})
+            self._key[id(pix)] = key
+        s = self._scaled[id(pix)]
+        p.save()
+        if zoom != 1.0:
+            p.translate(self.width() / 2, self.height() / 2)
+            p.scale(zoom, zoom)
+            p.translate(-self.width() / 2, -self.height() / 2)
+        p.drawPixmap((self.width() - s.width()) // 2, (self.height() - s.height()) // 3, s)
+        p.restore()
 
     def paintEvent(self, _e):
         p = QPainter(self)
@@ -86,15 +140,13 @@ class Hero(QWidget):
         path = QPainterPath()
         path.addRoundedRect(r, 18, 18)
         p.setClipPath(path)
-        if not self.pix.isNull():
-            s = self.pix.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation)
-            p.drawPixmap((self.width() - s.width()) // 2, (self.height() - s.height()) // 3, s)
+        if self.mix < 1.0 and (not self.old.isNull() or not self.pix.isNull()):
+            self._draw(p, self.old, 1.0)
+            p.setOpacity(self.mix)
+            self._draw(p, self.pix, 1.0 + 0.04 * (1.0 - self.mix))
+            p.setOpacity(1.0)
         else:
-            g = QLinearGradient(0, 0, self.width(), self.height())
-            g.setColorAt(0, QColor(T.ACCENT).darker(420))
-            g.setColorAt(1, QColor("#15151b"))
-            p.fillRect(self.rect(), g)
+            self._draw(p, self.pix, 1.0)
         side = QLinearGradient(0, 0, self.width(), 0)
         side.setColorAt(0, QColor(10, 10, 14, 200))
         side.setColorAt(0.5, QColor(10, 10, 14, 90))
@@ -340,6 +392,11 @@ class Window(QMainWindow):
         self.game_list.setContentsMargins(0, 0, 4, 0)
         self.game_list.setSpacing(2)
         self.game_scroll.setWidget(self.game_holder)
+        self.pill = QFrame(self.game_holder)
+        self.pill.setObjectName("pill")
+        self.pill.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.pill.hide()
+        self.game_holder.installEventFilter(self)
         v.addWidget(self.game_scroll, 1)
         v.addWidget(button("+  Add game", self.add_game, "ghost"))
         self.update_btn = button("", self.update_armory, "primary")
@@ -449,10 +506,30 @@ class Window(QMainWindow):
         lay.addLayout(right)
         return self.hero
 
+    def eventFilter(self, obj, ev):
+        if obj is getattr(self, "game_holder", None) and ev.type() in (ev.Type.Resize, ev.Type.LayoutRequest):
+            QTimer.singleShot(0, lambda: self.place_pill(animate=False))
+        return super().eventFilter(obj, ev)
+
+    def place_pill(self, animate=True):
+        row = self.rows.get(self.game.id) if self.game and hasattr(self, "rows") else None
+        if row is None or not row.isVisible():
+            self.pill.hide()
+            return
+        end = QRectF(row.geometry())
+        start = QRectF(self.pill.geometry()) if self.pill.isVisible() else end
+        self.pill.show()
+        self.pill.lower()
+        if not animate or start == end:
+            self.pill.setGeometry(row.geometry())
+            return
+        motion.tween(self.pill, start, end, lambda r: self.pill.setGeometry(QRectF(r).toRect()), 300)
+
     def filter_games(self):
         q = self.game_search.text().strip().lower()
         for row in self.rows.values():
             row.setVisible(not q or q in row.game.name.lower())
+        QTimer.singleShot(0, lambda: self.place_pill(animate=False))
 
     # ---- games ----
     def load_games(self, select=None):
@@ -494,6 +571,17 @@ class Window(QMainWindow):
         return st
 
     def select_game(self, gid):
+        """show a game: its content blends in (the header and background blend by themselves)"""
+        if self.game and self.game.id != gid and self.isVisible():
+            self._no_fade = True
+            try:
+                motion.crossfade(self.stack, lambda: self._select_game(gid), duration=280)
+            finally:
+                self._no_fade = False
+        else:
+            self._select_game(gid)
+
+    def _select_game(self, gid):
         g = next((x for x in self.games if x.id == gid), None)
         if not g:
             return
@@ -501,6 +589,7 @@ class Window(QMainWindow):
         self.store = self.store_for(g)
         for k, r in self.rows.items():
             r.setChecked(k == gid)
+        QTimer.singleShot(0, self.place_pill)
         config.save_conf(last_game=gid)
         art = games.steam_image(g.appid, "hero") or games.steam_image(g.appid, "header")
         self.hero.set_image(art)
@@ -576,6 +665,7 @@ class Window(QMainWindow):
             self.rows[g.id].set_count(len(mods), on)
         self.play_btn.setEnabled(g.found and bool(g.appid or g.launch))
         self.play_btn.setToolTip("Starts the game through Steam" if g.appid and not g.launch else g.launch)
+        self.pulse(self.deploying)
         if self.deploying:
             self.deploy_chip.setText("●  Updating game files...")
             restyle(self.deploy_chip, "chipBusy")
@@ -587,6 +677,27 @@ class Window(QMainWindow):
             restyle(self.deploy_chip, "chipOk")
             self.deploy_chip.setToolTip(f"{st.deployed_count()} mod files are in the game")
 
+    def pulse(self, on):
+        """the status chip breathes while mods are being put in the game"""
+        anim = getattr(self, "_pulse", None)
+        if on and motion.enabled():
+            if anim is None:
+                fx = QGraphicsOpacityEffect(self.deploy_chip)
+                self.deploy_chip.setGraphicsEffect(fx)
+                anim = QPropertyAnimation(fx, b"opacity", self)
+                anim.setDuration(900)
+                anim.setKeyValueAt(0, 1.0)
+                anim.setKeyValueAt(0.5, 0.45)
+                anim.setKeyValueAt(1, 1.0)
+                anim.setLoopCount(-1)
+                self._pulse = anim
+            if anim.state() != anim.State.Running:
+                anim.start()
+        elif anim is not None:
+            anim.stop()
+            self.deploy_chip.setGraphicsEffect(None)
+            self._pulse = None
+
     def fill_profiles(self):
         self.profile_box.blockSignals(True)
         self.profile_box.clear()
@@ -595,13 +706,23 @@ class Window(QMainWindow):
         self.profile_box.setCurrentText(self.store.active)
         self.profile_box.blockSignals(False)
 
+    PAGE_ORDER = ["mods", "plugins", "browse", "downloads"]
+
     def show_page(self, key):
         if not self.game:
             return
+        old = self.page
         self.page = key
         self.pages_seg.set(key)
-        self.stack.setCurrentWidget({"mods": self.mods_page, "plugins": self.plugins_page,
-                                     "browse": self.browse_page, "downloads": self.downloads_page}[key])
+        target = {"mods": self.mods_page, "plugins": self.plugins_page,
+                  "browse": self.browse_page, "downloads": self.downloads_page}[key]
+        if getattr(self, "_no_fade", False) or self.stack.currentWidget() is target:
+            self.stack.setCurrentWidget(target)
+        else:
+            # the old page drifts away from the tab you picked as it fades
+            way = -1 if self.PAGE_ORDER.index(key) > self.PAGE_ORDER.index(old) else 1
+            motion.crossfade(self.stack, lambda: self.stack.setCurrentWidget(target), slide=24 * way,
+                             duration=220)
         if key == "browse":
             self.browse_page.ensure_loaded()
         if key == "plugins":
