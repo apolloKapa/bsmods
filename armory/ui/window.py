@@ -1144,6 +1144,14 @@ class Window(QMainWindow):
         if self.need_login():
             return
         me = str((self.nexus.user or {}).get("user_id") or "")
+        if not link["key"] or not link["expires"]:
+            # the website's button always signs its links; a bare one came from somewhere else
+            if QMessageBox.question(self, "Download from Nexus?", f"A link asks Armory to download file "
+                                    f"{link['file_id']} of mod {link['mod_id']} for {g.name}. It didn't come from "
+                                    "Nexus's Mod Manager Download button. Download and install it?",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
         if link["user_id"] and me and link["user_id"] != me:
             QMessageBox.warning(self, "Not your link", "That download link was made for another Nexus account, "
                                 "so Armory won't use it. Press the button on Nexus yourself while logged in.")
@@ -1924,8 +1932,8 @@ class Window(QMainWindow):
             n += 1
         st.new_profile(name, copy=False)
         # the profile's config files: one mod at the bottom, so they win
-        files = [(os.path.join(d, f), os.path.relpath(os.path.join(d, f), tmp).replace(os.sep, "/"))
-                 for d, _, fs in os.walk(tmp) for f in fs]
+        files = [(os.path.join(d, f), layout.plain(os.path.relpath(os.path.join(d, f), tmp).replace(os.sep, "/")))
+                 for d, _, fs in os.walk(tmp) for f in fs if not os.path.islink(os.path.join(d, f))]
         if files:
             st.add(f"{name} config", files, {"name": f"{name}: config files", "source": {"type": "local"},
                                               "summary": "Config files that came with the imported profile",

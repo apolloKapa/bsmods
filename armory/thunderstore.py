@@ -20,14 +20,20 @@ def package_url(community, owner, name):
     return f"{SITE}/c/{community}/p/{owner}/{name}/"
 
 
+NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$")
+
+
 def download_url(owner, name, version):
+    # names come from links and listings: nothing that could change the address
+    if not (NAME.match(owner or "") and NAME.match(name or "") and NAME.match(version or "")):
+        raise NetError(f"Not a Thunderstore package: {owner}-{name}-{version}")
     return f"{SITE}/package/download/{owner}/{name}/{version}/"
 
 
 def parse_link(url):
     """ror2mm://v1/install/thunderstore.io/<owner>/<name>/<version>/ -> dict, or None"""
-    m = re.match(r"^ror2mm://v1/install/[^/]+/([^/]+)/([^/]+)/([^/?]+)/?", url.strip(), re.IGNORECASE)
-    if not m:
+    m = re.match(r"^ror2mm://v1/install/thunderstore\.io/([^/]+)/([^/]+)/([^/?]+)/?", url.strip(), re.IGNORECASE)
+    if not m or not all(NAME.match(x) for x in m.groups()):
         return None
     return {"owner": m.group(1), "name": m.group(2), "version": m.group(3),
             "full": f"{m.group(1)}-{m.group(2)}"}
@@ -203,6 +209,9 @@ def read_r2z(data, dest):
         r2x = next((n for n in names if n.lower().endswith("export.r2x")), None)
         if not r2x:
             raise ValueError("That isn't an r2modman/Gale profile (no export.r2x in it)")
+        infos = z.infolist()
+        if len(infos) > 5000 or sum(i.file_size for i in infos) > 256 * 1024 * 1024:
+            raise ValueError("That profile is too big (more than 5000 files or 256 MB)")
         name, mods = parse_r2x(z.read(r2x).decode("utf-8", "replace"))
         for n in names:
             if n == r2x or n.endswith("/"):

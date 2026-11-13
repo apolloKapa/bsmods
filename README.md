@@ -74,9 +74,16 @@ takes these over by itself: if another mod manager opens them now, it stays that
 
 ## Security
 
-- Archives are unpacked with bsdtar, which refuses absolute paths and `..`; the 7-Zip fallback is
-  checked for those first. Links inside archives are dropped, and FOMOD installers can't reach
-  files outside their own mod.
+- Archives are unpacked with bsdtar, which refuses absolute paths and `..`; the 7-Zip and unrar
+  fallbacks refuse archives with links or such paths. Links inside archives are dropped, and FOMOD
+  installers can't reach files outside their own mod.
+- Nothing from a mod (archive, FOMOD installer, shared profile) can choose where outside the game a
+  file goes: every file is checked before it's installed and again before it's put in the game, and
+  may only go in the game folder or the prefix/home folders that game's mods belong in.
+- Your Nexus key never follows a redirect to another site, and https never drops to http.
+- Nexus links without the website's signature (key and expiry) ask before downloading anything.
+- Answers from the internet have size limits (pictures 15 MB, API answers 128 MB), and a mod site's
+  data can't point Armory at your own files.
 - The Nexus key or token never goes anywhere but `api.nexusmods.com` / `users.nexusmods.com`, over
   HTTPS. Downloads and pictures are only fetched from http(s) addresses.
 - nxm:// links made for another Nexus account are refused. Thunderstore links ask before installing,

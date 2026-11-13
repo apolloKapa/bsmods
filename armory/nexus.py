@@ -30,7 +30,7 @@ def game_url(domain):
 
 def parse_nxm(url):
     """nxm://<game>/mods/<mod>/files/<file>?key=..&expires=..&user_id=.. -> dict, or None"""
-    m = re.match(r"^nxm://([^/]+)/mods/(\d+)/files/(\d+)/?(\?.*)?$", url.strip(), re.IGNORECASE)
+    m = re.match(r"^nxm://([a-z0-9]+)/mods/(\d+)/files/(\d+)/?(\?.*)?$", url.strip(), re.IGNORECASE)
     if not m:
         return None
     q = urllib.parse.parse_qs((m.group(4) or "?")[1:])

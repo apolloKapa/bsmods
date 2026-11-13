@@ -126,8 +126,39 @@ class Store:
                 return mid
         return None
 
+    def allowed_roots(self):
+        """the "@prefix/..." and "@home/..." folders this game's layout sends mods to"""
+        roots = set()
+
+        def walk(v):
+            if isinstance(v, dict):
+                for x in v.values():
+                    walk(x)
+            elif isinstance(v, (list, tuple)):
+                for x in v:
+                    walk(x)
+            elif isinstance(v, str) and v.startswith(("@prefix/", "@home/")):
+                # up to the first {name}: the folder the mods go in
+                roots.add(v.split("{", 1)[0].rstrip("/"))
+        walk(self.game.layout)
+        return roots
+
+    def check_path(self, rel):
+        """the last line of defence: a staged path stays inside the game folder, or inside one of
+        the folders this game's layout uses in the Proton prefix or your home; never .. or absolute"""
+        parts = rel.replace("\\", "/").split("/")
+        if rel.startswith("/") or ".." in parts or not rel.strip("/"):
+            raise DeployError(f"A mod file has an unsafe path: {rel}")
+        if parts[0] == "@keep":
+            return
+        if parts[0].startswith("@"):
+            if not any(rel == r or rel.startswith(r + "/") for r in self.allowed_roots()):
+                raise DeployError(f"A mod file would go outside the game: {rel}")
+
     def add(self, name, files, meta, replace=None, enable=True, move=False, link=False):
         """stage a mod: files is [(abs source, rel)]. Replacing keeps its place, profiles and marks"""
+        for _, rel in files:
+            self.check_path(rel)
         with self.lock:
             mid = replace if replace in self.mods else self.new_id(name)
             dest = self.mod_path(mid)
@@ -383,6 +414,12 @@ class Store:
                 # what is missing
                 for key, (mid, rel, src) in want.items():
                     if key in files:
+                        continue
+                    try:
+                        self.check_path(rel)
+                    except DeployError:
+                        # installed before the check existed: never put outside the game
+                        stats["skipped"].append(rel)
                         continue
                     base = g.resolve(rel)
                     if base is None:

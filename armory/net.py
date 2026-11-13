@@ -36,7 +36,64 @@ class NetError(Exception):
         self.status = status
 
 
-def request(url, data=None, headers=None, method=None, timeout=30):
+SENSITIVE = ("apikey", "authorization", "cookie")
+
+
+class SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """redirects never carry your Nexus key (or a token) to another site, and never go from https
+    to plain http (urllib copies every header across redirects by itself)"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if old.scheme == "https" and new.scheme != "https":
+            raise urllib.error.HTTPError(newurl, code, "Refused a redirect from https to http", headers, fp)
+        out = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if out is not None and (old.scheme, old.hostname, old.port) != (new.scheme, new.hostname, new.port):
+            for k in list(out.headers):
+                if k.lower() in SENSITIVE:
+                    del out.headers[k]
+            for k in list(out.unredirected_hdrs):
+                if k.lower() in SENSITIVE:
+                    del out.unredirected_hdrs[k]
+        return out
+
+
+_opener = None
+
+
+def opener():
+    global _opener
+    if _opener is None:
+        _opener = urllib.request.build_opener(SafeRedirect, urllib.request.HTTPSHandler(context=ssl_context()))
+    return _opener
+
+
+def read_capped(r, limit):
+    """the body, refusing anything over limit bytes (also once unzipped)"""
+    import zlib
+    gz = r.headers.get("Content-Encoding") == "gzip"
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS) if gz else None
+    out, raw_total = [], 0
+    while True:
+        chunk = r.read(1 << 16)
+        if not chunk:
+            break
+        raw_total += len(chunk)
+        if d is not None:
+            chunk = d.decompress(chunk, limit + 1 - sum(map(len, out)))
+        out.append(chunk)
+        if sum(map(len, out)) > limit or raw_total > limit:
+            raise NetError(f"The answer was bigger than {limit // (1 << 20)} MB, so it was refused")
+    body = b"".join(out)
+    if d is None and body[:2] == b"\x1f\x8b":
+        # gzipped without saying so (Thunderstore's listing chunks)
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        body = d.decompress(body, limit + 1)
+        if len(body) > limit or d.unconsumed_tail:
+            raise NetError(f"The answer was bigger than {limit // (1 << 20)} MB, so it was refused")
+    return body
+
+
+def request(url, data=None, headers=None, method=None, timeout=30, limit=128 << 20):
     check_url(url)
     h = {"User-Agent": UA, "Accept-Encoding": "gzip"}
     h.update(headers or {})
@@ -51,11 +108,8 @@ def request(url, data=None, headers=None, method=None, timeout=30):
             body = data
     req = urllib.request.Request(url, data=body, headers=h, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as r:
-            raw = r.read()
-            if r.headers.get("Content-Encoding") == "gzip" or raw[:2] == b"\x1f\x8b":
-                raw = gzip.decompress(raw)
-            return raw, dict(r.headers)
+        with opener().open(req, timeout=timeout) as r:
+            return read_capped(r, limit), dict(r.headers)
     except urllib.error.HTTPError as e:
         text = ""
         try:
@@ -93,7 +147,7 @@ def download(url, dest, progress=None, cancelled=lambda: False, headers=None):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     req = urllib.request.Request(url, headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as r, open(part, "wb") as f:
+        with opener().open(req, timeout=60) as r, open(part, "wb") as f:
             total = int(r.headers.get("Content-Length") or 0)
             done = 0
             while True:
@@ -127,7 +181,10 @@ def cached_image(url):
     if not url:
         return None
     if os.path.isabs(url):
-        return url if os.path.isfile(url) else None
+        # a mod site's data can't point Armory at your own files
+        from .config import DATA
+        ok = os.path.realpath(url).startswith((os.path.realpath(DATA) + os.sep, os.path.realpath(CACHE) + os.sep))
+        return url if ok and os.path.isfile(url) else None
     if not url.lower().startswith(("https://", "http://")):
         return None
     ext = os.path.splitext(urllib.parse.urlparse(url).path)[1][:5] or ".img"
@@ -135,7 +192,7 @@ def cached_image(url):
     if os.path.isfile(path):
         return path
     try:
-        raw, _ = request(url, timeout=20)
+        raw, _ = request(url, timeout=20, limit=15 << 20)
     except NetError:
         return None
     os.makedirs(os.path.dirname(path), exist_ok=True)

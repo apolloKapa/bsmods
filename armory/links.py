@@ -1,7 +1,6 @@
 """nxm:// and ror2mm:// links: making Armory the app that opens them, and sending a link (or
 files) to the Armory that's already running instead of starting a second one."""
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -14,17 +13,25 @@ SCHEMES = {"nxm": "Nexus Mods (Mod Manager Download)", "ror2mm": "Thunderstore (
 SOCKET = f"armory-{os.getuid()}"
 
 
+def quote(arg):
+    """an argument for a .desktop Exec line (its own rules, not the shell's): plain when it can be,
+    since some tools (xdg-mime) skip quoted programs"""
+    if arg and all(c.isalnum() or c in "/._-+~:@" for c in arg):
+        return arg
+    return '"' + "".join("\\" + c if c in '"`$\\' else c for c in arg) + '"'
+
+
 def command():
     """how to start this Armory from a .desktop file"""
     if os.environ.get("APPIMAGE"):
-        return shlex.quote(os.environ["APPIMAGE"])
+        return quote(os.environ["APPIMAGE"])
     if getattr(sys, "frozen", False):
-        return shlex.quote(sys.executable)
+        return quote(sys.executable)
     launcher = os.path.join(HOME, ".local/bin/armory")
     if os.path.exists(launcher):
-        return shlex.quote(launcher)
+        return quote(launcher)
     pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return f"env PYTHONPATH={shlex.quote(pkg_parent)} {shlex.quote(sys.executable)} -m armory"
+    return f"env PYTHONPATH={quote(pkg_parent)} {quote(sys.executable)} -m armory"
 
 
 def handler(scheme):

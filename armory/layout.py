@@ -107,7 +107,10 @@ def extract(src, dest, limit_gb=100):
         if tool == "unrar" and not src.lower().endswith(".rar"):
             continue
         if tool in ("7z", "7zz") and not safe_7z_listing(tool, src):
-            tried.append(f"{tool}: the archive has paths outside its own folder")
+            tried.append(f"{tool}: the archive has links or paths outside its own folder")
+            continue
+        if tool == "unrar" and not safe_rar_listing(src):
+            tried.append("unrar: the archive has links or paths outside its own folder")
             continue
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode == 0:
@@ -133,6 +136,26 @@ def safe_7z_listing(tool, src):
             p = line[7:].replace("\\", "/")
             if p.startswith("/") or re.match(r"^[A-Za-z]:", p) or ".." in p.split("/"):
                 return False
+        # links could point a later file outside the folder: mods don't need them
+        if (line.startswith(("Symbolic Link = ", "Hard Link = ")) and line.split(" = ", 1)[1].strip()) \
+                or line.startswith("Mode = l"):
+            return False
+    return True
+
+
+def safe_rar_listing(src):
+    """the same check for unrar: no absolute paths, .. or links"""
+    r = subprocess.run(["unrar", "lt", "-idq", src], capture_output=True, text=True)
+    if r.returncode != 0:
+        return True
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("Name:"):
+            p = line[5:].strip().replace("\\", "/")
+            if p.startswith("/") or re.match(r"^[A-Za-z]:", p) or ".." in p.split("/"):
+                return False
+        if line.startswith("Type:") and any(w in line.lower() for w in ("link", "junction")):
+            return False
     return True
 
 
@@ -173,6 +196,18 @@ def matches(name, patterns):
     return any(fnmatch.fnmatch(n, p.lower()) for p in patterns)
 
 
+SPECIAL = ("@prefix", "@home", "@keep")
+
+
+def plain(rel):
+    """a path that came from inside a mod (archive, installer, profile): Armory's own markers for
+    "Proton prefix", "home folder" and "kept out of the game" are escaped, so a folder named
+    "@home" in an archive is just a folder, never your home folder"""
+    rel = rel.replace("\\", "/").lstrip("/")
+    first = rel.split("/", 1)[0]
+    return "_" + rel if first.startswith("@") else rel
+
+
 def files_under(folder, ignore_top=()):
     """every file below folder: [(abs, rel)]"""
     out = []
@@ -187,7 +222,7 @@ def files_under(folder, ignore_top=()):
             rel = os.path.relpath(p, folder)
             if d == folder and matches(f, ignore_top):
                 continue
-            out.append((p, rel))
+            out.append((p, plain(rel)))
     return out
 
 
@@ -284,13 +319,13 @@ def plan(root, layout, name):
                     out.append((src, join(fill(target, safe), rel)))
             else:
                 for src, rel in files_under(p):
-                    out.append((src, join(default, os.path.join(n, rel))))
+                    out.append((src, join(default, plain(os.path.join(n, rel)))))
         else:
             if matches(n, ignore):
                 continue
             ext = os.path.splitext(n)[1].lower()
             target = emap.get(ext)
-            out.append((p, join(fill(target, safe) if target is not None else default, n)))
+            out.append((p, join(fill(target, safe) if target is not None else default, plain(n))))
     return finish(out, name, layout.get("keep_out", ()))
 
 

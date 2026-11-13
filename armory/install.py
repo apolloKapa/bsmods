@@ -54,7 +54,9 @@ def files_for(root, game, name, fomod_files=None):
     if fomod_files is not None:
         data = game.layout.get("data")
         base = data["dir"] if data else ""
-        return layout.finish([(src, f"{base}/{rel}" if base else rel) for src, rel in fomod_files], name)
+        # an installer's destinations are paths inside the game, whatever they say
+        return layout.finish([(src, f"{base}/{layout.plain(rel)}" if base else layout.plain(rel))
+                              for src, rel in fomod_files], name)
     return layout.plan(root, game.layout, name)
 
 
