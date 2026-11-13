@@ -15,10 +15,11 @@ from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGrap
 from .. import VERSION, config, games, install, layout, net, nexus, thunderstore
 from ..config import DATA, HOME
 from ..fomod import Fomod
-from ..store import DeployError, Store, staged_files
+from ..store import DeployError, Store, resolve_case, staged_files
 from . import tasks
 from .browse import BrowsePage
-from .dialogs import AddGameDialog, FomodWizard, ModDetailsDialog, NexusFilesDialog, SettingsDialog
+from .dialogs import (AddGameDialog, FomodWizard, ImportProfileDialog, ModDetailsDialog, NexusFilesDialog,
+                      SettingsDialog)
 from .downloads import Downloads, DownloadsPage
 from .mods import ModsPage, PluginsPage
 from . import theme as T
@@ -689,10 +690,45 @@ class Window(QMainWindow):
         self.install_paths([d["file"]], meta, meta.pop("replace", None), g, download=d)
 
     def download_finished(self, d):
+        src = (d.get("meta") or {}).get("source") or {}
+        if src.get("type") == "nexus" and self.nexus.logged_in and src.get("file_id"):
+            self.verify_nexus(d, src)
+            return
+        self.downloaded(d)
+
+    def downloaded(self, d):
         if d.get("install", True) and config.get("auto_install", True):
             self.install_download(d)
         else:
             self.say(f"Downloaded {d['name']}: install it from Downloads")
+
+    def verify_nexus(self, d, src):
+        """the downloaded file is the Nexus file it should be: Nexus knows every file's checksum"""
+        domain = src.get("domain") or (self.game.nexus if self.game else "")
+
+        def work():
+            hits = self.nexus.md5_search(domain, net.md5(d["file"]))
+            return any(int((h.get("file_details") or {}).get("file_id") or 0) == int(src["file_id"]) for h in hits), hits
+
+        def done(res):
+            ok, hits = res
+            if ok:
+                d.setdefault("meta", {})["verified"] = True
+                self.downloaded(d)
+                return
+            why = "It doesn't match any file on Nexus Mods." if not hits else \
+                "It matches a different file on Nexus Mods than the one asked for."
+            if QMessageBox.warning(self, "Download didn't check out",
+                                   f"{d['name']}: {why} It may be damaged or not what Nexus sent. Install it anyway?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                self.downloaded(d)
+
+        def fail(msg):
+            self.say(f"Couldn't check {d['name']} with Nexus ({msg}); installing it anyway")
+            self.downloaded(d)
+
+        tasks.run(work, done, fail)
 
     def next_install(self):
         if self.installing or not self.queue:
@@ -720,6 +756,30 @@ class Window(QMainWindow):
             QMessageBox.warning(self, f"Couldn't install {name}", msg)
 
         def unpacked(root):
+            if config.get("scan_mods", False):
+                self.say(f"Scanning {name} with ClamAV...")
+                tasks.run(lambda: layout.scan(root), lambda found: scanned(root, found),
+                          lambda msg: scan_failed(root, msg))
+                return
+            go_on(root)
+
+        def scanned(root, found):
+            if found:
+                cleanup()
+                QMessageBox.critical(self, f"{name} wasn't installed",
+                                     "ClamAV found something in it:\n\n" +
+                                     "\n".join(f"{f}: {what}" for f, what in found[:10]))
+                return
+            go_on(root)
+
+        def scan_failed(root, msg):
+            if QMessageBox.question(self, "Not scanned", f"{msg}\n\nInstall {name} anyway?") \
+                    == QMessageBox.StandardButton.Yes:
+                go_on(root)
+            else:
+                cleanup()
+
+        def go_on(root):
             fomod_files = None
             found = layout.find_fomod(root)
             if found:
@@ -749,7 +809,8 @@ class Window(QMainWindow):
                 if replace is False:
                     cleanup()
                     return
-            tasks.run(lambda: install.stage(st, root, name, meta, fomod_files, replace), staged, fail)
+            enable = not meta.pop("disabled", False)
+            tasks.run(lambda: install.stage(st, root, name, meta, fomod_files, replace, enable), staged, fail)
 
         def staged(mid):
             cleanup()
@@ -1242,6 +1303,11 @@ class Window(QMainWindow):
         m.addAction("Take every mod out of the game", self.purge)
         if g.adopt:
             m.addAction("Bring in mods already in the game", self.adopt_now)
+        if g.thunderstore:
+            m.addSeparator()
+            m.addAction("Import an r2modman / Gale profile...", self.import_ts_profile)
+            m.addAction("Share this profile as a code...", lambda: self.export_ts_profile(share=True))
+            m.addAction("Export this profile (.r2z)...", lambda: self.export_ts_profile(share=False))
         m.addSeparator()
         m.addAction("Change game folder...", self.change_game_dir)
         m.addAction("Remove from Armory...", self.remove_game)
@@ -1263,6 +1329,127 @@ class Window(QMainWindow):
         st = self.store
         tasks.run(st.purge, lambda s: (self.say(f"Took {s['removed']} files out of the game"), self.refresh_header()),
                   lambda msg: QMessageBox.warning(self, "Couldn't", msg))
+
+    # ---- r2modman / Gale profiles ----
+    def import_ts_profile(self):
+        g = self.game
+        dlg = ImportProfileDialog(self)
+        if not dlg.exec():
+            return
+        code, path = dlg.code.text().strip(), dlg.path
+        os.makedirs(os.path.join(DATA, "tmp"), exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix="profile-", dir=os.path.join(DATA, "tmp"))
+        self.say("Reading the profile...")
+
+        def work():
+            if path:
+                if os.path.getsize(path) > 256 * 1024 * 1024:
+                    raise ValueError("That file is too big to be a profile")
+                data = open(path, "rb").read()
+            else:
+                data = thunderstore.code_profile(code)
+            name, mods = thunderstore.read_r2z(data, tmp)
+            pk = thunderstore.index(thunderstore.listing(g.thunderstore))
+            return name, mods, pk
+
+        def done(res):
+            name, mods, pk = res
+            self.apply_ts_profile(g, dlg.name.text().strip() or name or "Imported", mods, pk, tmp)
+
+        def fail(msg):
+            shutil.rmtree(tmp, ignore_errors=True)
+            QMessageBox.warning(self, "Couldn't import the profile", msg)
+
+        tasks.run(work, done, fail)
+
+    def apply_ts_profile(self, g, name, mods, pk, tmp):
+        st = self.store_for(g)
+        base, n = name, 2
+        while name in st.profiles:
+            name = f"{base} ({n})"
+            n += 1
+        st.new_profile(name, copy=False)
+        # the profile's config files: one mod at the bottom, so they win
+        files = [(os.path.join(d, f), os.path.relpath(os.path.join(d, f), tmp).replace(os.sep, "/"))
+                 for d, _, fs in os.walk(tmp) for f in fs]
+        if files:
+            st.add(f"{name} config", files, {"name": f"{name}: config files", "source": {"type": "local"},
+                                              "summary": "Config files that came with the imported profile",
+                                              "pin_bottom": True})
+        shutil.rmtree(tmp, ignore_errors=True)
+        queued, ready, missing = 0, 0, []
+        for m in mods:
+            full, ver, on = m["full"], m["version"], m["enabled"]
+            have = st.find(thunderstore=full)
+            if have and str(st.mods[have].get("version")) == ver:
+                st.set_enabled(have, on)
+                ready += 1
+                continue
+            p = pk.get(full.lower())
+            owner, _, pname = full.partition("-")
+            if not pname:
+                missing.append(full)
+                continue
+            meta = {"name": (p or {}).get("name", pname).replace("_", " "), "version": ver, "author": owner,
+                    "summary": (p or {}).get("desc", ""), "picture": (p or {}).get("icon", ""),
+                    "source": {"type": "thunderstore", "full_name": full, "url": (p or {}).get("url", "")}}
+            if have:
+                meta["replace"] = have
+            if not on:
+                meta["disabled"] = True
+            self.dl.add(thunderstore.download_url(owner, pname, ver), f"{full}-{ver}.zip", g.id, meta)
+            queued += 1
+        self.fill_profiles()
+        self.changed()
+        self.say(f"Profile {name}: {ready} mods ready, {queued} downloading" +
+                 (f", {len(missing)} not understood" if missing else ""))
+
+    def export_ts_profile(self, share):
+        g, st = self.game, self.store
+        mods = []
+        for m in st.ordered():
+            s = m.get("source") or {}
+            if s.get("type") == "thunderstore" and s.get("full_name"):
+                mods.append({"full": s["full_name"], "version": m.get("version") or "0.0.0", "enabled": m["enabled"]})
+        if not mods:
+            QMessageBox.information(self, "Nothing to export", "This profile has no Thunderstore mods.")
+            return
+        files = []
+        cfg = resolve_case(g.path, "BepInEx/config") if g.found else ""
+        if cfg and os.path.isdir(cfg):
+            total = 0
+            for d, _, fs in os.walk(cfg):
+                for f in fs:
+                    p = os.path.join(d, f)
+                    total += os.path.getsize(p)
+                    if total > 50 * 1024 * 1024:
+                        break
+                    files.append((p, "BepInEx/config/" + os.path.relpath(p, cfg).replace(os.sep, "/")))
+        data = thunderstore.make_r2z(st.active, mods, files)
+        if not share:
+            path, _ = QFileDialog.getSaveFileName(self, "Export profile", os.path.join(HOME, f"{st.active}.r2z"),
+                                                  "r2modman profile (*.r2z)")
+            if path:
+                with open(path, "wb") as f:
+                    f.write(data)
+                self.say(f"Exported {len(mods)} mods to {os.path.basename(path)}")
+            return
+        if QMessageBox.question(self, "Share as a code", f"Upload this profile ({len(mods)} mods and your BepInEx "
+                                "config files) to Thunderstore? Anyone with the code can import it.") \
+                != QMessageBox.StandardButton.Yes:
+            return
+
+        def done(key):
+            QApplication.clipboard().setText(key)
+            box = QMessageBox(self)
+            box.setWindowTitle("Profile code")
+            box.setText(f"Copied to the clipboard:\n\n{key}\n\nFriends paste it in r2modman, Gale or Armory "
+                        "(Import a profile).")
+            box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            box.exec()
+
+        tasks.run(lambda: thunderstore.share_profile(data), done,
+                  lambda msg: QMessageBox.warning(self, "Couldn't share it", msg))
 
     def adopt_now(self):
         try:

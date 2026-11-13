@@ -8,6 +8,7 @@ also download from inside Armory.
 """
 import json
 import re
+import time
 import urllib.parse
 
 from . import VERSION, config, oauth
@@ -65,7 +66,15 @@ class Nexus:
         if not self.logged_in:
             raise NetError("Log in to Nexus Mods first (Settings → Nexus Mods)", 401)
         url = API + path + ("?" + urllib.parse.urlencode(params) if params else "")
-        raw, headers = request(url, headers=self._headers())
+        for attempt in range(3):
+            try:
+                raw, headers = request(url, headers=self._headers())
+                break
+            except NetError as e:
+                # rate limited: wait a little (longer each time) and try again, then give up
+                if e.status != 429 or attempt == 2:
+                    raise
+                time.sleep(5 * (attempt + 1))
         rem = headers.get("x-rl-daily-remaining") or headers.get("X-RL-Daily-Remaining")
         if rem:
             self.remaining = int(rem)

@@ -35,9 +35,68 @@ def mod_name_from_file(filename):
     return base.replace("_", " ").strip() or "Mod"
 
 
-def extract(src, dest):
+def unpacked_size(src):
+    """what an archive says it unpacks to, in bytes (None if it can't be listed)"""
+    if shutil.which("bsdtar"):
+        r = subprocess.run(["bsdtar", "-tvf", src], capture_output=True, text=True)
+        if r.returncode == 0:
+            total = 0
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if len(parts) > 4 and parts[4].isdigit():
+                    total += int(parts[4])
+            return total
+    for tool in ("7z", "7zz"):
+        if shutil.which(tool):
+            r = subprocess.run([tool, "l", "-slt", "-ba", src], capture_output=True, text=True)
+            if r.returncode == 0:
+                return sum(int(l[7:]) for l in r.stdout.splitlines() if l.startswith("Size = ") and l[7:].isdigit())
+    return None
+
+
+def check_size(src, dest, limit_gb):
+    """refuse archives that unpack to more than the limit or the free space (zip bombs)"""
+    size = unpacked_size(src)
+    if size is None:
+        return
+    free = shutil.disk_usage(dest).free
+    if size > limit_gb * 1024 ** 3:
+        raise LayoutError(f"{os.path.basename(src)} would unpack to {size / 1024 ** 3:.1f} GB, more than the "
+                          f"{limit_gb} GB limit (Settings → Installing)")
+    if size > free - 512 * 1024 ** 2:
+        raise LayoutError(f"{os.path.basename(src)} needs {size / 1024 ** 3:.1f} GB to unpack and there's only "
+                          f"{free / 1024 ** 3:.1f} GB free")
+
+
+def scanner():
+    """the ClamAV command to scan with ("" if ClamAV isn't installed)"""
+    return shutil.which("clamdscan") or shutil.which("clamscan") or ""
+
+
+def scan(folder):
+    """[(file, what was found)] for an unpacked mod, scanned with ClamAV; raises LayoutError if it can't"""
+    tool = scanner()
+    if not tool:
+        raise LayoutError("ClamAV isn't installed (clamscan), so the mod couldn't be scanned")
+    cmd = [tool, "--fdpass", "--multiscan", "--no-summary", "--infected", folder] if tool.endswith("clamdscan") \
+        else [tool, "-r", "--no-summary", "--infected", folder]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        return []
+    found = []
+    for line in r.stdout.splitlines():
+        if line.endswith(" FOUND"):
+            path, _, what = line[:-6].rpartition(": ")
+            found.append((os.path.relpath(path, folder), what))
+    if r.returncode == 1 and found:
+        return found
+    raise LayoutError("ClamAV couldn't scan the mod: " + (r.stderr.strip().splitlines() or ["unknown error"])[-1])
+
+
+def extract(src, dest, limit_gb=100):
     """unpack an archive into dest (bsdtar first, then 7z or unrar for what it can't read)"""
     os.makedirs(dest, exist_ok=True)
+    check_size(src, dest, limit_gb)
     tried = []
     for tool, cmd in (("bsdtar", ["bsdtar", "-xf", src, "-C", dest]),
                       ("7z", ["7z", "x", "-y", "-bd", f"-o{dest}", src]),

@@ -142,3 +142,113 @@ def search(packages, text="", sort="popular", nsfw=True, deprecated=False):
         # pinned ones (the mod loader) first, like the website
         out.sort(key=lambda p: not p["pinned"])
     return out
+
+
+# ---- profiles shared by r2modman / Gale (.r2z files and profile codes) ----------------------------
+# An .r2z is a zip with export.r2x (a small YAML list of packages and versions) and the profile's
+# config files (BepInEx/config/...). A profile code is a key for one uploaded to Thunderstore.
+
+PROFILE_GET = f"{SITE}/api/experimental/legacyprofile/get/{{}}/"
+PROFILE_CREATE = f"{SITE}/api/experimental/legacyprofile/create/"
+PROFILE_PREFIX = "#r2modman"
+
+
+def parse_r2x(text):
+    """export.r2x -> (profile name, [{"full", "version", "enabled"}]); just the parts r2modman writes"""
+    name, mods, cur, in_version = "", [], None, False
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        line = raw.strip()
+        if raw.startswith("profileName:"):
+            name = line.split(":", 1)[1].strip().strip("'\"")
+        elif line.startswith("- name:"):
+            cur = {"full": line.split(":", 1)[1].strip().strip("'\""), "v": {}, "enabled": True}
+            mods.append(cur)
+            in_version = False
+        elif cur is not None and line.startswith("version:"):
+            rest = line.split(":", 1)[1].strip()
+            in_version = not rest
+            if rest:
+                cur["v"]["text"] = rest.strip("'\"")
+        elif cur is not None and in_version and line.split(":", 1)[0] in ("major", "minor", "patch"):
+            k, v = (x.strip() for x in line.split(":", 1))
+            cur["v"][k] = v
+        elif cur is not None and line.startswith("enabled:"):
+            cur["enabled"] = line.split(":", 1)[1].strip().lower() != "false"
+            in_version = False
+    out = []
+    for m in mods:
+        v = m["v"]
+        ver = v.get("text") or ".".join(v.get(k, "0") for k in ("major", "minor", "patch"))
+        out.append({"full": m["full"], "version": ver, "enabled": m["enabled"]})
+    return name, out
+
+
+def make_r2x(name, mods):
+    lines = [f"profileName: {name}", "mods:"]
+    for m in mods:
+        parts = (str(m["version"]).split(".") + ["0", "0", "0"])[:3]
+        lines += [f"  - name: {m['full']}", "    version:", f"      major: {parts[0]}", f"      minor: {parts[1]}",
+                  f"      patch: {parts[2]}", f"    enabled: {'true' if m['enabled'] else 'false'}"]
+    return "\n".join(lines) + "\n"
+
+
+def read_r2z(data, dest):
+    """an .r2z (bytes): its profile name and mods; its other files are unpacked into dest"""
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        names = z.namelist()
+        r2x = next((n for n in names if n.lower().endswith("export.r2x")), None)
+        if not r2x:
+            raise ValueError("That isn't an r2modman/Gale profile (no export.r2x in it)")
+        name, mods = parse_r2x(z.read(r2x).decode("utf-8", "replace"))
+        for n in names:
+            if n == r2x or n.endswith("/"):
+                continue
+            target = os.path.normpath(os.path.join(dest, n))
+            # nothing outside dest, whatever the zip says
+            if not target.startswith(os.path.abspath(dest) + os.sep):
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with z.open(n) as src, open(target, "wb") as out:
+                out.write(src.read(64 * 1024 * 1024 + 1)[:64 * 1024 * 1024])
+    return name, mods
+
+
+def make_r2z(name, mods, files):
+    """bytes of an .r2z: files is [(abs path, path inside, e.g. BepInEx/config/x.cfg)]"""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("export.r2x", make_r2x(name, mods))
+        for src, arc in files:
+            z.write(src, arc)
+    return buf.getvalue()
+
+
+def code_profile(code):
+    """a profile code's .r2z bytes"""
+    import base64
+    code = code.strip()
+    if not re.fullmatch(r"[0-9a-fA-F-]{20,64}", code):
+        raise NetError("That doesn't look like a profile code")
+    raw, _ = request(PROFILE_GET.format(code), timeout=60)
+    text = raw.decode("utf-8", "replace").strip()
+    if not text.startswith(PROFILE_PREFIX):
+        raise NetError("Thunderstore didn't send a profile for that code")
+    return base64.b64decode(text[len(PROFILE_PREFIX):].strip())
+
+
+def share_profile(data):
+    """upload an .r2z to Thunderstore: the code friends paste into r2modman, Gale or Armory"""
+    import base64
+    body = (PROFILE_PREFIX + "\n" + base64.b64encode(data).decode()).encode()
+    raw, _ = request(PROFILE_CREATE, data=body, method="POST", headers={"Content-Type": "application/octet-stream"},
+                     timeout=60)
+    key = json.loads(raw).get("key")
+    if not key:
+        raise NetError("Thunderstore didn't give a code back")
+    return key

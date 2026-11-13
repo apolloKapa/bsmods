@@ -94,6 +94,8 @@ class Store:
         for prof in self.profiles.values():
             order = [m for m in prof.get("order", []) if m in self.mods]
             order += [m for m in self.mods if m not in order]
+            # an imported profile's config files stay last, so they win over mods added after them
+            order.sort(key=lambda m: bool(self.mods[m].get("pin_bottom")))
             prof["order"] = order
             prof["enabled"] = [m for m in prof.get("enabled", []) if m in self.mods]
 

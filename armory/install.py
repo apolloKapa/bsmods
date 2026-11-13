@@ -2,7 +2,7 @@
 import os
 import shutil
 
-from . import layout
+from . import config, layout
 from .config import read_json
 
 
@@ -17,7 +17,7 @@ def unpack(src, tmp):
         shutil.copy2(src, d)
         return d
     d = os.path.join(tmp, "unpacked")
-    layout.extract(src, d)
+    layout.extract(src, d, int(config.get("max_unpack_gb", 100) or 100))
     return d
 
 

@@ -207,6 +207,26 @@ FONT_FILE = os.path.join(os.path.dirname(ICON), "fonts", "InterVariable.ttf")
 _started = False
 
 
+def plain_message_boxes():
+    """every QMessageBox shows its text as plain text: mod names in them come from mod sites"""
+    from PyQt6.QtWidgets import QMessageBox
+    B = QMessageBox.StandardButton
+
+    def make(icon, default_buttons):
+        def show(parent, title, text, buttons=default_buttons, default=B.NoButton):
+            box = QMessageBox(icon, title, text, buttons, parent)
+            box.setTextFormat(Qt.TextFormat.PlainText)
+            if default != B.NoButton:
+                box.setDefaultButton(default)
+            return B(box.exec())
+        return show
+
+    QMessageBox.information = staticmethod(make(QMessageBox.Icon.Information, B.Ok))
+    QMessageBox.warning = staticmethod(make(QMessageBox.Icon.Warning, B.Ok))
+    QMessageBox.critical = staticmethod(make(QMessageBox.Icon.Critical, B.Ok))
+    QMessageBox.question = staticmethod(make(QMessageBox.Icon.Question, B.Yes | B.No))
+
+
 def apply(app, key=None, accent=None):
     """set up the app's look; later calls only change the colours (swapping the style or the font of a
     running app crashes Qt)"""
@@ -214,6 +234,7 @@ def apply(app, key=None, accent=None):
     set_palette(key, accent)
     if not _started:
         _started = True
+        plain_message_boxes()
         app.setStyle("Fusion")
         from PyQt6.QtGui import QFontDatabase
         if os.path.exists(FONT_FILE):

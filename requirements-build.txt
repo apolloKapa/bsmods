@@ -1,0 +1,21 @@
+# Exact versions (with hashes) of everything the AppImage build installs: build_appimage.sh uses
+# pip install --require-hashes, so a changed or swapped package stops the build.
+# Wheels for CPython 3.10 (CI, Ubuntu 22.04) and 3.14. To update: pip download them and hash them.
+
+PyQt6==6.12.0 \
+    --hash=sha256:1922bf7440310845a4fd06f4242288084dc26cf682a67e561b115570a8def3d1
+PyQt6-Qt6==6.12.0 \
+    --hash=sha256:b76e9962e83cf7daff9bb7ab169c804f37b77ab2d7393d3b380351f5a2441ee0
+PyQt6-sip==13.13.1 \
+    --hash=sha256:a8a6758e3c49da9106887d6ce53231aa8434736985a3aa4db15927b713bc8f50 \
+    --hash=sha256:c3bbc6d119c581d3f90a5c3cfc97025e6ae2ccc5bfc87a2fa68fe3d72ec2e631
+pyinstaller==6.22.3 \
+    --hash=sha256:451a4ae14b719365bf1a2f0a99dae7b3463060061c3a394c70d5264cfb439528
+pyinstaller-hooks-contrib==2026.10 \
+    --hash=sha256:dfc3cde20a7ce6c92e803016e66eed4b7050467e2c5f886a3745d89b258c6d6d
+altgraph==0.17.5 \
+    --hash=sha256:f3a22400bce1b0c701683820ac4f3b159cd301acab067c51c653e06961600597
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+setuptools==84.2.1 \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2

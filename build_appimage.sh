@@ -14,8 +14,8 @@ VENV="$BUILD/venv"
 VERSION="${ARMORY_VERSION:-$(git describe --tags --always 2>/dev/null || echo dev)}"
 
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
-"$VENV/bin/python" -m pip install -q --upgrade pip
-"$VENV/bin/python" -m pip install -q pyinstaller PyQt6
+# exact, hash-checked versions (requirements-build.txt): a swapped package on PyPI stops the build
+"$VENV/bin/python" -m pip install -q --require-hashes --only-binary=:all: -r requirements-build.txt
 
 # the icon, rendered from the SVG
 QT_QPA_PLATFORM=offscreen "$VENV/bin/python" - armory/armory.svg "$BUILD/armory.png" <<'PY'

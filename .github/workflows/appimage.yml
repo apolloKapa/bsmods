@@ -28,6 +28,7 @@ jobs:
       - name: Get appimagetool
         run: |
           wget -q -O appimagetool https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool" | sha256sum -c -
           chmod +x appimagetool
 
       - name: Build AppImage
@@ -48,4 +49,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Armory $GITHUB_REF_NAME" --notes "Mod manager for Linux games (Steam + Proton), with Nexus Mods and Thunderstore. Download Armory-x86_64.AppImage, make it executable (chmod +x) and run it."
-          gh release upload "$GITHUB_REF_NAME" dist/Armory-x86_64.AppImage --clobber
+          (cd dist && sha256sum Armory-x86_64.AppImage > SHA256SUMS)
+          gh release upload "$GITHUB_REF_NAME" dist/Armory-x86_64.AppImage dist/SHA256SUMS --clobber

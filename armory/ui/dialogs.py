@@ -368,6 +368,22 @@ class SettingsDialog(QDialog):
         self.auto.setChecked(config.get("auto_install", True))
         self.auto.toggled.connect(lambda on: config.save_conf(auto_install=on))
         f.addRow(self.auto)
+        self.scan = QCheckBox("Scan mods with ClamAV before installing them")
+        from ..layout import scanner
+        has_clam = bool(scanner())
+        self.scan.setChecked(config.get("scan_mods", False) and has_clam)
+        self.scan.setEnabled(has_clam)
+        self.scan.setToolTip("" if has_clam else "Install ClamAV (clamav package) to use this")
+        self.scan.toggled.connect(lambda on: config.save_conf(scan_mods=on))
+        f.addRow(self.scan)
+        if not has_clam:
+            f.addRow(label("ClamAV isn't installed: install the clamav package to scan mods", "small", True))
+        self.limit = QSpinBox()
+        self.limit.setRange(1, 2000)
+        self.limit.setSuffix(" GB")
+        self.limit.setValue(int(config.get("max_unpack_gb", 100) or 100))
+        self.limit.valueChanged.connect(lambda v: config.save_conf(max_unpack_gb=v))
+        f.addRow(label("Largest a mod may unpack to"), self.limit)
         self.keep = QCheckBox("Keep downloaded files (to reinstall without downloading again)")
         self.keep.setChecked(config.get("keep_downloads", True))
         self.keep.toggled.connect(lambda on: config.save_conf(keep_downloads=on))
@@ -393,6 +409,49 @@ class SettingsDialog(QDialog):
         f.addWidget(self.adult)
         v.addWidget(box)
         v.addStretch(1)
+
+
+class ImportProfileDialog(QDialog):
+    """a profile code, or an .r2z file, from r2modman or Gale"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Import a profile")
+        self.setMinimumWidth(520)
+        self.path = ""
+        v = QVBoxLayout(self)
+        v.setContentsMargins(22, 20, 22, 18)
+        v.setSpacing(10)
+        v.addWidget(label("Import a profile", "title"))
+        v.addWidget(label("Paste a profile code from r2modman or Gale (Export → as code), or pick an exported "
+                          ".r2z file. It becomes a new profile here, with the same mods, versions and config "
+                          "files.", "muted", True))
+        self.code = QLineEdit()
+        self.code.setPlaceholderText("Profile code, like 018f2a6e-...")
+        v.addWidget(self.code)
+        row = QHBoxLayout()
+        self.file_note = label("", "small")
+        row.addWidget(button("Or pick a file...", self.pick))
+        row.addWidget(self.file_note, 1)
+        v.addLayout(row)
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Name for the new profile (optional)")
+        v.addWidget(self.name)
+        r = QHBoxLayout()
+        r.addStretch(1)
+        r.addWidget(button("Cancel", self.reject))
+        r.addWidget(button("Import", self.ok, "primary"))
+        v.addLayout(r)
+
+    def pick(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Profile file", config.HOME, "Profiles (*.r2z *.zip);;All files (*)")
+        if p:
+            self.path = p
+            self.file_note.setText(os.path.basename(p))
+            self.code.clear()
+
+    def ok(self):
+        if self.code.text().strip() or self.path:
+            self.accept()
 
 
 class ThemeSwatch(QPushButton):
