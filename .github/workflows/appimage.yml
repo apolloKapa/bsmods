@@ -1,6 +1,6 @@
 name: AppImage
 
-# Pushing a v* tag builds BS_Mods-x86_64.AppImage and attaches it to a release for that tag.
+# Pushing a v* tag builds Armory-x86_64.AppImage and attaches it to a release for that tag.
 # Running it by hand (Actions -> AppImage -> Run workflow) only uploads it as a build artifact.
 on:
   push:
@@ -34,18 +34,18 @@ jobs:
         env:
           APPIMAGETOOL: ${{ github.workspace }}/appimagetool
           APPIMAGE_EXTRACT_AND_RUN: "1"
-          BSMODS_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+          ARMORY_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         run: ./build_appimage.sh
 
       - uses: actions/upload-artifact@v5
         with:
-          name: BS_Mods-x86_64.AppImage
-          path: dist/BS_Mods-x86_64.AppImage
+          name: Armory-x86_64.AppImage
+          path: dist/Armory-x86_64.AppImage
 
       - name: Attach to release
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "BS Mods $GITHUB_REF_NAME" --notes "Blade & Sorcery mod manager for Linux. Download BS_Mods-x86_64.AppImage, make it executable (chmod +x) and run it."
-          gh release upload "$GITHUB_REF_NAME" dist/BS_Mods-x86_64.AppImage --clobber
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Armory $GITHUB_REF_NAME" --notes "Mod manager for Linux games (Steam + Proton), with Nexus Mods and Thunderstore. Download Armory-x86_64.AppImage, make it executable (chmod +x) and run it."
+          gh release upload "$GITHUB_REF_NAME" dist/Armory-x86_64.AppImage --clobber

@@ -1,43 +1,73 @@
-# BS Mods
+# Armory
 
-A small mod manager for **Blade & Sorcery** on Linux (Steam + Proton).
+A mod manager for Linux games (Steam + Proton), with **Nexus Mods** and **Thunderstore** built in.
+It started as BS Mods, a Blade & Sorcery mod manager, and now handles any game.
 
-Blade & Sorcery mods are plain folders the game loads by itself, so they work under Proton exactly
-like on Windows; only the Windows mod managers don't run. BS Mods does their job:
-
-- finds the game in any of your Steam libraries (or asks for the folder once)
-- installs mods from what you download (`.zip`, `.7z`, `.rar`): drop them on the window or use
-  **Install mods...**; packs with several mods, and mods nested in extra folders, are handled
-- turns mods **off and on** without deleting them (off ones wait in `~/.local/share/bsmods/disabled`,
-  where the game can't see them)
-- keeps mods on **three pages, 1.0, U12 and U11**, sorted by the game version each mod was made
-  for. Only the page in use is in the game's Mods folder; the others wait in
-  `~/.local/share/bsmods/pages`. After switching the game version in Steam (Properties → Betas),
-  open that page and press **Use this page** to swap its mods in. A mod on the wrong page can be
-  moved with its ⋯ menu
-- shows each mod's version, author and the game version it's for, as a **list or a grid**
-- puts **NSFW** mods in their own tab: ones with NSFW words in their name or description go there by
-  themselves, and ⋯ → **Mark as NSFW** / **Not NSFW** moves any mod in or out
-- **hides** mods you don't want to see (⋯ → **Hide**): they only show in the Hidden tab. Hiding
-  doesn't turn a mod off; the game still loads it while it's on. NSFW and hidden marks are kept in
-  `~/.config/bsmods/config.json`, not in the mods
-- removes mods, opens the Mods folder, and links to Nexus Mods (**Get mods**)
+- **Finds your games** in every Steam library and shows them with their Steam artwork. Add others
+  from the list of supported games, or any game with its folder ("Another game").
+- **Never unpacks into the game.** Mods are kept in `~/.local/share/armory` and put in the game
+  folder as hard links (or symlinks, or copies) while they're on. Turning one off takes out exactly
+  its files; files of the game a mod replaced are backed up and put back.
+- **Knows where files go**: BepInEx and MelonLoader games, Thunderstore packages, Bethesda's `Data`
+  folder, Blade & Sorcery / Stardew / Celeste mod folders, BONELAB pallets (in the Proton prefix),
+  Cyberpunk, No Man's Sky, RDR2 and more. Archives that are laid out like the game folder go in as
+  they are.
+- **FOMOD installers** run as a step-by-step wizard (options, pictures, conditions).
+- **Order and conflicts**: drag mods to set their priority (lower in the list wins a file both
+  have). Cards show which mods win and lose files; ⋯ → Files and conflicts lists them.
+- **Profiles**: each keeps its own set of mods on and off, their order and the plugin load order.
+- **Plugins** (Bethesda games): load order with drag and drop, on/off, "Sort by masters", written
+  to the Proton prefix's `Plugins.txt`.
+- **Nexus Mods**: log in with your personal API key, then press **Mod Manager Download** on any
+  mod's Files tab and Armory downloads and installs it. Browse and search a game's mods inside
+  Armory, check for updates, endorse mods. Premium accounts can download from inside Armory and
+  update with one click. Files you downloaded by hand are matched to their Nexus page by checksum.
+- **Thunderstore**: browse and search, one-click install with all dependencies (BepInExPack too),
+  updates, and the website's "Install with Mod Manager" button.
+- **Play** puts the mods that are on in the game and starts it through Steam. When a loader needs
+  a Proton DLL override (BepInEx, MelonLoader, ASI loaders) Armory shows the exact launch option
+  to paste into Steam.
+- NSFW and hidden tabs, list or grid view, a download queue, drag and drop installs.
 
 ## Install
 
-Needs `python3` and `bsdtar` (libarchive, installed on most systems). No sudo:
+Download `Armory-x86_64.AppImage` from the [releases](https://github.com/apolloKapa/bsmods/releases),
+make it executable and run it. Or, from a checkout (needs `python3`, and `bsdtar` or `7z`):
 
 ```
-git clone https://github.com/apolloKapa/bsmods.git
-cd bsmods
-./install.sh
+./install.sh               # installs the "armory" command and a launcher entry, no sudo
+./install.sh --uninstall   # removes the app; mods, profiles and downloads stay
 ```
 
-Then open **BS Mods** from your app launcher, or run `bsmods`. `./install.sh` again updates it,
-`./install.sh --uninstall` removes it (your mods stay).
+## Logging in to Nexus Mods
 
-## Getting mods
+Nexus only lets apps it has registered use one-click sign-in, so Armory uses your **personal API
+key**: Settings → Nexus Mods → Open the API keys page, copy the key at the bottom, paste it in.
+It's stored in `~/.config/armory/nexus.json`, readable only by you.
 
-Download from [Nexus Mods](https://www.nexusmods.com/bladeandsorcery) with **Manual download** (the
-Vortex button needs Windows), then drop the file on BS Mods. Mods have to be made for your game
-version (1.0 for the current game), and some need other mods: Nexus lists them under Requirements.
+For the website's mod manager buttons to reach Armory, go to **Settings → Links** and press
+**Open them with Armory** for Nexus Mods (`nxm://`) and/or Thunderstore (`ror2mm://`). Armory never
+takes these over by itself: if another mod manager opens them now, it stays that way until you ask.
+
+## Where things are
+
+| | |
+|---|---|
+| `~/.config/armory/config.json` | settings, the games you added, folders you picked |
+| `~/.config/armory/nexus.json` | your Nexus API key |
+| `~/.local/share/armory/games/<game>/mods/` | each mod, laid out like the game folder |
+| `~/.local/share/armory/games/<game>/profiles.json` | profiles: on/off, order, plugins |
+| `~/.local/share/armory/games/<game>/deployed.json` | every file Armory put in the game |
+| `~/.local/share/armory/games/<game>/backup/` | game files a mod replaced |
+| `~/.local/share/armory/downloads/` | downloaded archives (for reinstalling) |
+
+## Coming from BS Mods
+
+The first time you open Blade & Sorcery, the mods in its Mods folder (and the ones BS Mods kept in
+`~/.local/share/bsmods`: turned off, and the other pages) move under Armory; the ones that were
+off or on another page come in turned off. Instead of the 1.0 / U12 / U11 pages, use profiles: make
+one per game version (Profile ⋯ → New profile) and switch between them.
+
+## License
+
+MIT. Armory is written from scratch; it doesn't contain code from other mod managers.
