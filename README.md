@@ -33,7 +33,7 @@ It started as BS Mods, a Blade & Sorcery mod manager, and now handles any game.
 
 ## Install
 
-Download `Armory-x86_64.AppImage` from the [releases](https://github.com/apolloKapa/bsmods/releases),
+Download `Armory-x86_64.AppImage` from the [releases](https://github.com/apolloKapa/armory/releases),
 make it executable and run it. Or, from a checkout (needs `python3`, and `bsdtar` or `7z`):
 
 ```
