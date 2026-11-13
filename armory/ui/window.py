@@ -6,13 +6,13 @@ import tempfile
 import time
 import webbrowser
 
-from PyQt6.QtCore import QRectF, Qt, QTimer, QUrl
+from PyQt6.QtCore import QFileSystemWatcher, QRectF, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
                              QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
-from .. import VERSION, config, games, install, layout, net, nexus, thunderstore
+from .. import VERSION, config, games, install, layout, net, nexus, thunderstore, updates
 from ..config import DATA, HOME
 from ..fomod import Fomod
 from ..store import DeployError, Store, resolve_case, staged_files
@@ -235,6 +235,19 @@ class Window(QMainWindow):
         nl.addLayout(self.notice_btns)
         self.notice.hide()
         v.addWidget(self.notice)
+        # new archives in the Downloads folder
+        self.dl_bar = QFrame()
+        self.dl_bar.setObjectName("notice")
+        bl = QHBoxLayout(self.dl_bar)
+        bl.setContentsMargins(16, 9, 11, 9)
+        self.dl_text = label("", wrap=True)
+        bl.addWidget(self.dl_text, 1)
+        self.dl_install = button("Install", self.install_offered, "primary")
+        bl.addWidget(self.dl_install)
+        bl.addWidget(button("Dismiss", self.dismiss_offered))
+        self.dl_bar.hide()
+        self.dl_pending = []
+        v.addWidget(self.dl_bar)
 
         self.pages_seg = Tabs([("mods", "Mods"), ("plugins", "Plugins"), ("browse", "Browse"),
                                ("downloads", "Downloads")], self.show_page, "mods")
@@ -265,6 +278,18 @@ class Window(QMainWindow):
         h.addWidget(self.main, 1)
         self.toast = Toast(self.main)
         self.overlay = DropOverlay(root)
+
+        self.dl_watch = QFileSystemWatcher(self)
+        self.dl_watch.directoryChanged.connect(lambda _: self.dl_settle.start())
+        self.dl_settle = QTimer(self)
+        self.dl_settle.setSingleShot(True)
+        self.dl_settle.setInterval(2500)
+        self.dl_settle.timeout.connect(self.scan_downloads)
+        self.dl_seen = {}
+        self.dl_offered = set()
+        self.watch_downloads()
+        self.new_release = None
+        QTimer.singleShot(6000, lambda: self.check_armory_update(quiet=True))
 
         self.load_games(config.get("last_game"))
         if self.nexus.logged_in:
@@ -316,6 +341,9 @@ class Window(QMainWindow):
         self.game_scroll.setWidget(self.game_holder)
         v.addWidget(self.game_scroll, 1)
         v.addWidget(button("+  Add game", self.add_game, "ghost"))
+        self.update_btn = button("", self.update_armory, "primary")
+        self.update_btn.hide()
+        v.addWidget(self.update_btn)
         line = QFrame()
         line.setObjectName("hline")
         line.setFixedHeight(1)
@@ -503,6 +531,7 @@ class Window(QMainWindow):
         self.refresh_header()
         self.first_run_import()
         self.check_notices()
+        self.show_offered()
         if g.found:
             # in case Steam (verifying files, an update) took mods out
             self.deploy_timer.start()
@@ -826,6 +855,8 @@ class Window(QMainWindow):
                 self.changed()
             else:
                 self.deploy_store(st)
+            if (m.get("source") or {}).get("type") == "nexus":
+                self.fetch_requirements(st, [mid])
             if (m.get("source") or {}).get("type") == "local" and self.nexus.logged_in and g.nexus and \
                     os.path.isfile(src):
                 self.link_to_nexus(st, mid, src)
@@ -882,6 +913,7 @@ class Window(QMainWindow):
                            version=f.get("version") or mod.get("version") or m.get("version"),
                            author=m.get("author") or mod.get("author"), summary=m.get("summary") or mod.get("summary"),
                            picture=mod.get("picture_url"), adult=bool(mod.get("contains_adult_content")) or None)
+            self.fetch_requirements(st, [mid])
             if st is self.store:
                 self.mods_page.refresh()
 
@@ -1093,6 +1125,7 @@ class Window(QMainWindow):
         if not g:
             return
         mods = {mid: dict(m) for mid, m in st.mods.items() if ids is None or mid in ids}
+        self.fetch_requirements(st, list(mods))
         nx = self.nexus if self.nexus.logged_in else None
         has_ts = any((m.get("source") or {}).get("type") == "thunderstore" for m in mods.values())
         has_nx = any((m.get("source") or {}).get("type") == "nexus" for m in mods.values())
@@ -1329,6 +1362,165 @@ class Window(QMainWindow):
         st = self.store
         tasks.run(st.purge, lambda s: (self.say(f"Took {s['removed']} files out of the game"), self.refresh_header()),
                   lambda msg: QMessageBox.warning(self, "Couldn't", msg))
+
+    # ---- Armory updates ----
+    def check_armory_update(self, quiet=False):
+        if quiet and not updates.due():
+            cached = config.get("update_available")
+            if cached and updates.vtuple(cached.get("version")) > updates.vtuple(VERSION):
+                self.show_update(cached)
+            return
+
+        def done(info):
+            config.save_conf(update_available=info)
+            if info:
+                self.show_update(info)
+            elif not quiet:
+                self.say(f"Armory {VERSION} is the newest")
+
+        tasks.run(updates.latest, done, (lambda m: None) if quiet else (lambda m: self.say(f"Couldn't check: {m}")))
+
+    def show_update(self, info):
+        self.new_release = info
+        self.update_btn.setText(f"⬆  Armory {info['version']} is out")
+        self.update_btn.setToolTip("Update Armory" if updates.appimage() else "Open the download page")
+        self.update_btn.show()
+
+    def update_armory(self):
+        info = self.new_release
+        if not info:
+            return
+        if not updates.appimage() or not info.get("asset"):
+            webbrowser.open(info["url"])
+            return
+        if QMessageBox.question(self, "Update Armory", f"Download Armory {info['version']} and replace this "
+                                "AppImage? It's checked against the release's checksum first.") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        self.update_btn.setEnabled(False)
+
+        def prog(a, b):
+            self.update_btn.setText(f"Downloading... {a * 100 // b}%" if b else "Downloading...")
+
+        def done(path):
+            self.update_btn.setText("Restart to finish updating")
+            self.update_btn.setEnabled(True)
+            self.update_btn.clicked.disconnect()
+            self.update_btn.clicked.connect(lambda: self.restart_into(path))
+            config.save_conf(update_available=None)
+
+        def fail(msg):
+            self.update_btn.setEnabled(True)
+            self.show_update(info)
+            QMessageBox.warning(self, "Update failed", msg)
+
+        tasks.run(lambda p: updates.install(info, p), done, fail, progress=prog)
+
+    def restart_into(self, path):
+        from PyQt6.QtCore import QProcess
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("APPIMAGE", "APPDIR", "ARGV0", "OWD"))}
+        proc = QProcess()
+        proc.setProgram("sh")
+        proc.setArguments(["-c", 'sleep 1; exec "$0"', path])
+        from PyQt6.QtCore import QProcessEnvironment
+        pe = QProcessEnvironment()
+        for k, v in env.items():
+            pe.insert(k, v)
+        proc.setProcessEnvironment(pe)
+        proc.startDetached()
+        QApplication.instance().quit()
+
+    # ---- the Downloads folder ----
+    def downloads_folder(self):
+        return os.path.expanduser(config.get("downloads_folder") or os.path.join(HOME, "Downloads"))
+
+    def watch_downloads(self):
+        for d in self.dl_watch.directories():
+            self.dl_watch.removePath(d)
+        folder = self.downloads_folder()
+        if config.get("watch_downloads", True) and os.path.isdir(folder):
+            self.dl_watch.addPath(folder)
+            # what's there already isn't new
+            self.dl_seen = {n: os.path.getsize(os.path.join(folder, n)) for n in os.listdir(folder)
+                            if os.path.isfile(os.path.join(folder, n))}
+            self.dl_offered = set(self.dl_seen)
+
+    def scan_downloads(self):
+        folder = self.downloads_folder()
+        try:
+            names = [n for n in os.listdir(folder) if os.path.isfile(os.path.join(folder, n))]
+        except OSError:
+            return
+        busy = {n.rsplit(".", 1)[0] for n in names if n.endswith((".part", ".crdownload", ".download", ".tmp"))}
+        waiting = False
+        for n in names:
+            if n in self.dl_offered or not layout.is_archive(n) or n in busy:
+                continue
+            size = os.path.getsize(os.path.join(folder, n))
+            if self.dl_seen.get(n) != size:
+                # still growing: look again in a moment
+                self.dl_seen[n] = size
+                waiting = True
+                continue
+            self.dl_offered.add(n)
+            self.offer_download(os.path.join(folder, n))
+        if waiting:
+            self.dl_settle.start()
+
+    def offer_download(self, path):
+        if not self.game:
+            return
+        self.dl_pending.append(path)
+        self.show_offered()
+
+    def show_offered(self):
+        if not self.dl_pending or not self.game:
+            self.dl_bar.hide()
+            return
+        names = [os.path.basename(p) for p in self.dl_pending]
+        what = names[0] if len(names) == 1 else f"{len(names)} archives ({', '.join(names[:2])}...)"
+        self.dl_text.setText(f"New in Downloads: {what}")
+        self.dl_install.setText(f"Install for {self.game.name}")
+        self.dl_bar.show()
+
+    def install_offered(self):
+        paths = [p for p in self.dl_pending if os.path.exists(p)]
+        self.dl_pending = []
+        self.dl_bar.hide()
+        self.install_paths(paths)
+
+    def dismiss_offered(self):
+        self.dl_pending = []
+        self.dl_bar.hide()
+
+    # ---- Nexus requirements ----
+    def fetch_requirements(self, st, mids):
+        """what the Nexus pages of these mods say they need (kept on each mod)"""
+        domain = st.game.nexus
+        by_id = {}
+        for mid in mids:
+            s = (st.mods.get(mid) or {}).get("source") or {}
+            if s.get("type") == "nexus" and s.get("mod_id"):
+                by_id.setdefault(int(s["mod_id"]), []).append(mid)
+        if not domain or not by_id:
+            return
+
+        def done(reqs):
+            for mod_id, items in reqs.items():
+                for mid in by_id.get(mod_id, []):
+                    st.update_meta(mid, requires=items or None)
+            if st is self.store:
+                self.mods_page.refresh()
+
+        tasks.run(lambda: nexus.requirements(domain, list(by_id)), done)
+
+    def get_requirement(self, r):
+        g = self.game
+        if r.get("external") or not r.get("mod_id"):
+            if r.get("url"):
+                webbrowser.open(r["url"])
+            return
+        self.nexus_install(g, r["mod_id"], {"name": r.get("name")})
 
     # ---- r2modman / Gale profiles ----
     def import_ts_profile(self):

@@ -109,6 +109,12 @@ class ModCard(QFrame):
                 l_.setToolTip(tip("Some of its files are replaced by: " + names(c["loses"]) +
                                   "\nMove it lower in the list to win them"))
                 chips.addWidget(l_)
+        missing = missing_requirements(store, m)
+        if missing:
+            need = label(f"Needs {len(missing)}", "badgeOld")
+            need.setToolTip(tip("Its Nexus page says it needs:\n" + "\n".join(r["name"] for r in missing) +
+                                "\n\n⋯ → Get ... downloads them"))
+            chips.addWidget(need)
         if store.is_nsfw(m):
             chips.addWidget(label("NSFW", "badgeNsfw"))
         if not m["enabled"]:
@@ -162,6 +168,17 @@ class ModTile(QFrame):
         self.setFixedHeight(self.sizeHint().height())
 
 
+def missing_requirements(store, m):
+    """required Nexus mods (on the same site) that aren't installed, and other things it needs"""
+    out = []
+    for r in m.get("requires") or []:
+        if r.get("external"):
+            out.append(r)
+        elif r.get("mod_id") and not store.find(nexus=r["mod_id"]):
+            out.append(r)
+    return out
+
+
 def mod_switch(page, m):
     sw = Switch(m["enabled"])
     sw.setToolTip("On: it's in the game. Off: kept here, the game doesn't see it")
@@ -185,6 +202,9 @@ def mod_menu(page, m, parent):
         menu.addAction("Open on Thunderstore", lambda: open_web(url))
     if m.get("update"):
         menu.addAction(f"Update to v{m['update'].get('version')}", lambda: w.update_mod(m["id"]))
+    for r in missing_requirements(store, m):
+        menu.addAction(f"Get {r['name'] or 'requirement'}" + (" (website)" if r.get("external") else ""),
+                       lambda r=r: w.get_requirement(r))
     menu.addAction("Check for an update", lambda: w.check_updates([m["id"]]))
     menu.addSeparator()
     menu.addAction("Files and conflicts...", lambda: w.mod_details(m["id"]))

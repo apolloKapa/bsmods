@@ -177,3 +177,30 @@ def search(domain, text="", sort="popular", offset=0, count=30, adult=True):
         raise NetError(res["errors"][0].get("message", "Search failed"))
     mods = res["data"]["mods"]
     return mods["totalCount"], mods["nodes"]
+
+
+REQ_QUERY = """query($ids: [CompositeDomainWithIdInput!]!) {
+  legacyModsByDomain(ids: $ids) {
+    nodes { modId modRequirements { nexusRequirements { nodes { modId modName url notes externalRequirement } } } }
+  }
+}"""
+
+
+def requirements(domain, mod_ids):
+    """{mod id: [{"mod_id", "name", "url", "notes", "external"}]} from the mods' pages (public API, no key)"""
+    out = {}
+    ids = sorted({int(i) for i in mod_ids if i})
+    for i in range(0, len(ids), 40):
+        chunk = [{"gameDomain": domain, "modId": m} for m in ids[i:i + 40]]
+        res = get_json(GQL, data={"query": REQ_QUERY, "variables": {"ids": chunk}},
+                       headers={"Application-Name": "Armory", "Application-Version": VERSION})
+        if res.get("errors"):
+            raise NetError(res["errors"][0].get("message", "Couldn't read requirements"))
+        for node in res["data"]["legacyModsByDomain"]["nodes"]:
+            reqs = []
+            for r in ((node.get("modRequirements") or {}).get("nexusRequirements") or {}).get("nodes") or []:
+                reqs.append({"mod_id": int(r["modId"]) if str(r.get("modId") or "").isdigit() else 0,
+                             "name": r.get("modName") or "", "url": r.get("url") or "", "notes": r.get("notes") or "",
+                             "external": bool(r.get("externalRequirement"))})
+            out[int(node["modId"])] = reqs
+    return out
