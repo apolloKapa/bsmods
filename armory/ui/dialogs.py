@@ -6,13 +6,13 @@ import webbrowser
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QFrame,
-                             QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QRadioButton,
+                             QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QRadioButton,
                              QScrollArea, QSpinBox, QStackedWidget, QTextBrowser, QTreeWidget, QTreeWidgetItem,
                              QVBoxLayout, QWidget)
 
 from .. import config, games, links, nexus, oauth
 from ..config import human
-from . import tasks
+from . import tasks, theme
 from .theme import Segments, button, label, rounded
 
 
@@ -32,13 +32,13 @@ class SettingsDialog(QDialog):
         v.setContentsMargins(22, 20, 22, 18)
         v.setSpacing(14)
         v.addWidget(label("Settings", "title"))
-        self.segs = Segments([("nexus", "Nexus Mods"), ("links", "Links"), ("deploy", "Installing"),
-                              ("browse", "Browse")], self.show_tab, tab)
+        self.segs = Segments([("appearance", "Appearance"), ("nexus", "Nexus Mods"), ("links", "Links"),
+                              ("deploy", "Installing"), ("browse", "Browse")], self.show_tab, tab)
         v.addWidget(self.segs, 0, Qt.AlignmentFlag.AlignLeft)
         self.stack = QStackedWidget()
         self.pages = {}
-        for key, build in (("nexus", self.build_nexus), ("links", self.build_links), ("deploy", self.build_deploy),
-                           ("browse", self.build_browse)):
+        for key, build in (("appearance", self.build_appearance), ("nexus", self.build_nexus),
+                           ("links", self.build_links), ("deploy", self.build_deploy), ("browse", self.build_browse)):
             w = QWidget()
             build(w)
             self.pages[key] = self.stack.addWidget(w)
@@ -58,6 +58,78 @@ class SettingsDialog(QDialog):
         self.stack.setCurrentIndex(self.pages[key])
         if key == "links":
             self.refresh_links()
+
+    # -- appearance --
+    def build_appearance(self, w):
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 6, 0, 0)
+        v.setSpacing(12)
+        v.addWidget(label("Theme", "h2"))
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        self.swatches = {}
+        group = QButtonGroup(self)
+        current = config.get("theme", "armory")
+        for i, (key, t) in enumerate(theme.THEMES.items()):
+            sw = ThemeSwatch(key, t)
+            sw.setChecked(key == current)
+            sw.clicked.connect(lambda _=False, k=key: self.pick_theme(k))
+            group.addButton(sw)
+            grid.addWidget(sw, i // 3, i % 3)
+            self.swatches[key] = sw
+        v.addLayout(grid)
+
+        box = frame()
+        f = QVBoxLayout(box)
+        f.setContentsMargins(16, 14, 16, 14)
+        f.setSpacing(10)
+        row = QHBoxLayout()
+        t = QVBoxLayout()
+        t.addWidget(label("Accent colour", "h2"))
+        self.accent_note = label("", "muted", True)
+        t.addWidget(self.accent_note)
+        row.addLayout(t, 1)
+        row.addWidget(button("Choose...", self.pick_accent))
+        self.accent_reset = button("Theme's own", lambda: self.set_accent(""))
+        row.addWidget(self.accent_reset)
+        f.addLayout(row)
+        self.ambient = QCheckBox("Show the game's artwork behind the page")
+        self.ambient.setChecked(config.get("ambient", True))
+        self.ambient.toggled.connect(self.toggle_ambient)
+        f.addWidget(self.ambient)
+        v.addWidget(box)
+        v.addStretch(1)
+        self.refresh_accent()
+
+    def refresh_accent(self):
+        acc = config.get("accent", "")
+        self.accent_note.setText(f"Your own: {acc}" if acc else "The theme's own colour, used for buttons, "
+                                 "switches and highlights.")
+        self.accent_reset.setVisible(bool(acc))
+
+    def pick_theme(self, key):
+        config.save_conf(theme=key)
+        self.window.retheme()
+        for k, sw in self.swatches.items():
+            sw.setChecked(k == key)
+
+    def pick_accent(self):
+        from PyQt6.QtGui import QColor
+        from PyQt6.QtWidgets import QColorDialog
+        c = QColorDialog.getColor(QColor(theme.ACCENT), self, "Accent colour")
+        if c.isValid():
+            self.set_accent(c.name())
+
+    def set_accent(self, color):
+        config.save_conf(accent=color)
+        self.window.retheme()
+        self.refresh_accent()
+        for sw in self.swatches.values():
+            sw.update()
+
+    def toggle_ambient(self, on):
+        config.save_conf(ambient=on)
+        self.window.main.update()
 
     # -- Nexus --
     def build_nexus(self, w):
@@ -321,6 +393,54 @@ class SettingsDialog(QDialog):
         f.addWidget(self.adult)
         v.addWidget(box)
         v.addStretch(1)
+
+
+class ThemeSwatch(QPushButton):
+    """a small picture of a theme: its background, sidebar, a card and the accent"""
+    def __init__(self, key, t):
+        super().__init__()
+        self.key, self.t = key, t
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(92)
+        self.setMinimumWidth(180)
+        self.setToolTip(t["label"])
+        self.setStyleSheet("QPushButton { background: transparent; border: none; padding: 0; }")
+
+    def paintEvent(self, _e):
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(2, 2, -2, -2)
+        path = QPainterPath()
+        path.addRoundedRect(r, 12, 12)
+        p.setClipPath(path)
+        p.fillRect(r, QColor(self.t["bg"]))
+        p.fillRect(QRectF(r.left(), r.top(), r.width() * 0.28, r.height()), QColor(self.t["panel"]))
+        fg = QColor(0, 0, 0, 18) if self.t.get("light") else QColor(255, 255, 255, 14)
+        for i in range(2):
+            card = QRectF(r.left() + r.width() * 0.33, r.top() + 12 + i * 24, r.width() * 0.6, 18)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fg)
+            p.drawRoundedRect(card, 5, 5)
+        custom = config.get("accent") if self.key == config.get("theme", "armory") else ""
+        acc = QColor(custom or self.t["accent"])
+        p.setBrush(acc)
+        p.drawRoundedRect(QRectF(r.right() - 40, r.top() + 15, 22, 12), 6, 6)
+        p.drawRoundedRect(QRectF(r.left() + 8, r.top() + 12, r.width() * 0.28 - 16, 8), 4, 4)
+        p.setClipping(False)
+        f = QFont()
+        f.setPixelSize(12)
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(self.t["text"]))
+        p.drawText(QRectF(r.left() + r.width() * 0.33, r.bottom() - 26, r.width() * 0.6, 20),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.t["label"])
+        pen = QPen(QColor(theme.ACCENT) if self.isChecked() else QColor(128, 128, 140, 70), 2.5 if self.isChecked() else 1)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(r, 12, 12)
 
 
 class AddGameDialog(QDialog):
@@ -674,7 +794,6 @@ class ModDetailsDialog(QDialog):
         tree = QTreeWidget()
         tree.setHeaderLabels(["File", "Conflict"])
         tree.setColumnWidth(0, 470)
-        tree.setStyleSheet("QTreeWidget { background: #1c1c22; border: 1px solid #2a2a33; border-radius: 10px; }")
         from ..store import staged_files
         n_win = n_lose = 0
         for key, rel in sorted(staged_files(store.mod_path(mid)).items()):

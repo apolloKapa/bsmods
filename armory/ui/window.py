@@ -21,8 +21,8 @@ from .browse import BrowsePage
 from .dialogs import AddGameDialog, FomodWizard, ModDetailsDialog, NexusFilesDialog, SettingsDialog
 from .downloads import Downloads, DownloadsPage
 from .mods import ModsPage, PluginsPage
-from .theme import (ACCENT, BG, ICON, Tabs, Toast, blurred, button, label, menu_button, placeholder, restyle,
-                    rounded)
+from . import theme as T
+from .theme import ICON, Tabs, Toast, blurred, button, label, menu_button, placeholder, restyle, rounded
 
 PROXY_DLLS = {"winhttp.dll": "BepInEx", "version.dll": "MelonLoader", "dinput8.dll": "the script loader",
               "dxgi.dll": "the injector", "d3d11.dll": "the injector", "winmm.dll": "the loader",
@@ -48,19 +48,21 @@ class Ambient(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(BG))
-        if self.src.isNull():
+        bg = QColor(T.BG)
+        p.fillRect(self.rect(), bg)
+        if self.src.isNull() or not config.get("ambient", True):
             return
         h = min(self.height(), 520)
         if self.cache.isNull() or self.cache.width() < self.width():
             self.cache = blurred(self.src, self.width(), h)
-        p.setOpacity(0.42)
+        p.setOpacity(0.30 if T.LIGHT else 0.42)
         p.drawPixmap(0, 0, self.cache, (self.cache.width() - self.width()) // 2, 0, self.width(), h)
         p.setOpacity(1)
         fade = QLinearGradient(0, 0, 0, h)
-        fade.setColorAt(0, QColor(13, 13, 17, 90))
-        fade.setColorAt(0.55, QColor(13, 13, 17, 200))
-        fade.setColorAt(1, QColor(13, 13, 17, 255))
+        for at, alpha in ((0, 90), (0.55, 200), (1, 255)):
+            c = QColor(bg)
+            c.setAlpha(alpha)
+            fade.setColorAt(at, c)
         p.fillRect(0, 0, self.width(), h, fade)
 
 
@@ -88,7 +90,7 @@ class Hero(QWidget):
             p.drawPixmap((self.width() - s.width()) // 2, (self.height() - s.height()) // 3, s)
         else:
             g = QLinearGradient(0, 0, self.width(), self.height())
-            g.setColorAt(0, QColor("#2c2519"))
+            g.setColorAt(0, QColor(T.ACCENT).darker(420))
             g.setColorAt(1, QColor("#15151b"))
             p.fillRect(self.rect(), g)
         side = QLinearGradient(0, 0, self.width(), 0)
@@ -131,8 +133,7 @@ class GameRow(QPushButton):
         t = QVBoxLayout()
         t.setSpacing(2)
         t.addStretch(1)
-        n = label(game.name)
-        n.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {'#ececf2' if game.found else '#7a7a88'};")
+        n = label(game.name, "gameName" if game.found else "gameNameOff")
         n.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         s = label("", "small")
         s.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -162,21 +163,25 @@ class DropOverlay(QWidget):
     def paintEvent(self, _e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.rect(), QColor(17, 17, 21, 215))
+        shade = QColor(T.BG)
+        shade.setAlpha(220)
+        p.fillRect(self.rect(), shade)
         r = QRectF(self.rect()).adjusted(16, 16, -16, -16)
-        p.setPen(QPen(QColor(ACCENT), 2, Qt.PenStyle.DashLine))
-        p.setBrush(QColor(201, 169, 110, 26))
+        acc = QColor(T.ACCENT)
+        p.setPen(QPen(acc, 2, Qt.PenStyle.DashLine))
+        acc.setAlpha(26)
+        p.setBrush(acc)
         p.drawRoundedRect(r, 18, 18)
         f = QFont()
         f.setPixelSize(22)
         f.setBold(True)
         p.setFont(f)
-        p.setPen(QColor("#e8e8ef"))
+        p.setPen(QColor(T.TEXT))
         p.drawText(r, Qt.AlignmentFlag.AlignCenter, "Drop to install\n")
         f.setPixelSize(13)
         f.setBold(False)
         p.setFont(f)
-        p.setPen(QColor("#a0a0ad"))
+        p.setPen(QColor(T.MUTED))
         p.drawText(r.adjusted(0, 40, 0, 0), Qt.AlignmentFlag.AlignCenter, self.text)
 
 
@@ -311,8 +316,8 @@ class Window(QMainWindow):
         v.addWidget(self.game_scroll, 1)
         v.addWidget(button("+  Add game", self.add_game, "ghost"))
         line = QFrame()
+        line.setObjectName("hline")
         line.setFixedHeight(1)
-        line.setStyleSheet("background: rgba(255,255,255,0.06);")
         v.addSpacing(4)
         v.addWidget(line)
         v.addSpacing(2)
@@ -346,13 +351,14 @@ class Window(QMainWindow):
         gear.setToolTip(f"Settings  ·  Armory v{VERSION}")
         gear.setCursor(Qt.CursorShape.PointingHandCursor)
         gear.setStyleSheet("font-size: 18px; padding: 8px 10px;")
-        gear.clicked.connect(lambda: self.settings("nexus"))
+        gear.clicked.connect(lambda: self.settings("appearance"))
         foot.addWidget(gear)
         v.addLayout(foot)
         return side
 
     def build_hero(self):
         self.hero = Hero()
+        self.hero.setObjectName("hero")
         lay = QHBoxLayout(self.hero)
         lay.setContentsMargins(30, 22, 24, 22)
         lay.setSpacing(16)
@@ -372,7 +378,6 @@ class Window(QMainWindow):
         self.deploy_chip = label("", "chipOk")
         chips.addWidget(self.deploy_chip)
         self.subtitle = label("", "small")
-        self.subtitle.setStyleSheet("color: #a5a5b2;")
         chips.addSpacing(4)
         chips.addWidget(self.subtitle)
         chips.addStretch(1)
@@ -469,7 +474,8 @@ class Window(QMainWindow):
         config.save_conf(last_game=gid)
         art = games.steam_image(g.appid, "hero") or games.steam_image(g.appid, "header")
         self.hero.set_image(art)
-        self.main.set_image(art or games.steam_image(g.appid, "capsule"))
+        self.main_art = art or games.steam_image(g.appid, "capsule")
+        self.main.set_image(self.main_art)
         self.title.setText(g.name)
         logo = games.steam_image(g.appid, "logo")
         pix = QPixmap(logo) if logo else QPixmap()
@@ -1311,6 +1317,16 @@ class Window(QMainWindow):
         dlg = AddGameDialog(self, [g.id for g in self.games])
         if dlg.exec() and dlg.result_id:
             self.load_games(dlg.result_id)
+
+    def retheme(self):
+        """the theme changed: new colours everywhere, keeping what's on screen"""
+        T.apply(QApplication.instance())
+        self.main.update()
+        self.load_games(self.game.id if self.game else None)
+        self.downloads_page.refresh()
+        self.browse_page.refresh_tiles()
+        self.account_changed()
+        self.update()
 
     def settings(self, tab="nexus"):
         SettingsDialog(self, tab).exec()

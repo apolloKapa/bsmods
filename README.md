@@ -27,6 +27,8 @@ It started as BS Mods, a Blade & Sorcery mod manager, and now handles any game.
 - **Play** puts the mods that are on in the game and starts it through Steam. When a loader needs
   a Proton DLL override (BepInEx, MelonLoader, ASI loaders) Armory shows the exact launch option
   to paste into Steam.
+- **Themes**: Armory, Midnight, Violet, Ember, Forest, Rose, Frost, OLED black and Light, any accent
+  colour you like, and the game's artwork behind the page (Settings → Appearance; changes at once).
 - NSFW and hidden tabs, list or grid view, a download queue, drag and drop installs.
 
 ## Install
