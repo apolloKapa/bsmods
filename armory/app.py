@@ -110,6 +110,14 @@ def main():
     except OSError:
         pass
     theme.apply(app)
+    if getattr(sys, "frozen", False):
+        # Qt has read what it needs: from here on, everything Armory starts (the keyring tool, the
+        # browser behind every link, Steam) sees your system's environment, not the bundle's
+        from . import config
+        keep = {k: os.environ[k] for k in ("APPIMAGE", "APPDIR") if k in os.environ}
+        clean = config.clean_env()
+        os.environ.clear()
+        os.environ.update(clean, **keep)
     from .ui.window import Window
     w = Window()
 

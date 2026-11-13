@@ -98,14 +98,25 @@ def short_count(n):
 
 
 def clean_env(env=None):
-    """the environment for programs Armory starts: without the AppImage's own library path"""
+    """the environment for programs Armory starts (the keyring tool, your browser, Steam, tools):
+    without the AppImage's own libraries and paths, which break them"""
     import sys
     env = dict(os.environ if env is None else env)
-    if "LD_LIBRARY_PATH_ORIG" in env:
-        env["LD_LIBRARY_PATH"] = env.pop("LD_LIBRARY_PATH_ORIG")
-    elif getattr(sys, "frozen", False):
-        env.pop("LD_LIBRARY_PATH", None)
-    for k in ("QT_PLUGIN_PATH", "QML2_IMPORT_PATH", "PYTHONHOME", "PYTHONPATH"):
-        if getattr(sys, "frozen", False):
-            env.pop(k, None)
+    if getattr(sys, "frozen", False):
+        # PyInstaller points variables like LD_LIBRARY_PATH at the bundle and keeps yours in NAME_ORIG
+        if "LD_LIBRARY_PATH_ORIG" not in env:
+            env.pop("LD_LIBRARY_PATH", None)
+        for key in [k for k in env if k.endswith("_ORIG")]:
+            value = env.pop(key)
+            if value:
+                env[key[:-5]] = value
+            else:
+                env.pop(key[:-5], None)
+        for key in ("PYTHONHOME", "PYTHONPATH", "QT_PLUGIN_PATH", "QML2_IMPORT_PATH", "QT_QPA_PLATFORM_PLUGIN_PATH",
+                    "GDK_PIXBUF_MODULE_FILE", "GIO_MODULE_DIR"):
+            env.pop(key, None)
+        for key in [k for k in env if k.startswith(("_PYI", "_MEI"))]:
+            env.pop(key)
+    for key in ("APPDIR", "APPIMAGE", "ARGV0", "OWD"):
+        env.pop(key, None)
     return env

@@ -12,6 +12,23 @@ from .config import CACHE
 
 UA = f"Armory/{VERSION} (Linux mod manager)"
 
+# the AppImage's OpenSSL looks for certificates where its build machine keeps them (/usr/lib/ssl),
+# which most distros don't have: use the system's own bundle, wherever this distro keeps it
+CA_FILES = ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt",
+            "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", "/etc/ssl/ca-bundle.pem", "/etc/ssl/cert.pem",
+            "/usr/local/share/certs/ca-root-nss.crt", "/etc/certs/ca-certificates.crt"]
+_ctx = None
+
+
+def ssl_context():
+    global _ctx
+    if _ctx is None:
+        import ssl
+        cafile = os.environ.get("SSL_CERT_FILE") if os.path.isfile(os.environ.get("SSL_CERT_FILE", "")) else None
+        cafile = cafile or next((p for p in CA_FILES if os.path.isfile(p)), None)
+        _ctx = ssl.create_default_context(cafile=cafile) if cafile else ssl.create_default_context()
+    return _ctx
+
 
 class NetError(Exception):
     def __init__(self, msg, status=0):
@@ -34,7 +51,7 @@ def request(url, data=None, headers=None, method=None, timeout=30):
             body = data
     req = urllib.request.Request(url, data=body, headers=h, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as r:
             raw = r.read()
             if r.headers.get("Content-Encoding") == "gzip" or raw[:2] == b"\x1f\x8b":
                 raw = gzip.decompress(raw)
@@ -76,7 +93,7 @@ def download(url, dest, progress=None, cancelled=lambda: False, headers=None):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     req = urllib.request.Request(url, headers=h)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
+        with urllib.request.urlopen(req, timeout=60, context=ssl_context()) as r, open(part, "wb") as f:
             total = int(r.headers.get("Content-Length") or 0)
             done = 0
             while True:

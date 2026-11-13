@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 
+from . import config
 from .config import SECRETS, read_json, write_json
 
 ATTRS = ["application", "armory", "kind"]
@@ -18,7 +19,8 @@ def _keyring_get(kind):
     if not _tool():
         return None
     try:
-        r = subprocess.run([_tool(), "lookup", *ATTRS, kind], capture_output=True, text=True, timeout=5)
+        r = subprocess.run([_tool(), "lookup", *ATTRS, kind], capture_output=True, text=True, timeout=5,
+                           env=config.clean_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout if r.returncode == 0 and r.stdout else None
@@ -29,7 +31,7 @@ def _keyring_set(kind, value):
         return False
     try:
         r = subprocess.run([_tool(), "store", f"--label=Armory: Nexus Mods {kind}", *ATTRS, kind],
-                           input=value, capture_output=True, text=True, timeout=10)
+                           input=value, capture_output=True, text=True, timeout=10, env=config.clean_env())
     except (OSError, subprocess.TimeoutExpired):
         return False
     # read it back: some setups "succeed" without a keyring to store in
@@ -39,7 +41,7 @@ def _keyring_set(kind, value):
 def _keyring_clear(kind):
     if _tool():
         try:
-            subprocess.run([_tool(), "clear", *ATTRS, kind], capture_output=True, timeout=5)
+            subprocess.run([_tool(), "clear", *ATTRS, kind], capture_output=True, timeout=5, env=config.clean_env())
         except (OSError, subprocess.TimeoutExpired):
             pass
 

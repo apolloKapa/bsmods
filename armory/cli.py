@@ -9,6 +9,7 @@
   armory purge GAME                    take every mod out of the game
   armory install GAME FILE...          install archives (mods with an installer wizard need the window)
   armory play GAME                     deploy, then start the game
+  armory nexus                         whether you're logged in to Nexus Mods (and as whom)
   armory version                       Armory's version (and whether a newer one is out)
 GAME is an id like lethalcompany or a name like "Lethal Company".
 """
@@ -22,7 +23,7 @@ from . import VERSION, config, games, install, layout, saves, updates
 from .store import Store
 
 COMMANDS = {"games", "mods", "profiles", "use", "enable", "disable", "deploy", "purge", "install", "play",
-            "version", "help", "--help", "-h"}
+            "version", "nexus", "help", "--help", "-h"}
 
 
 def find_game(q):
@@ -65,6 +66,16 @@ def main(argv):
                 print(f"Armory {new['version']} is out: {new['url']}")
         except Exception as e:  # noqa: BLE001 - only informational
             print(f"(couldn't check for a newer one: {e})")
+        return 0
+    if cmd == "nexus":
+        from . import nexus, oauth
+        nx = nexus.Nexus()
+        if not nx.logged_in:
+            print("Not logged in to Nexus Mods (Settings → Nexus Mods in the window)")
+            return 1
+        u = nx.validate()
+        how = "signed in through Nexus" if oauth.signed_in() else "API key"
+        print(f"Logged in as {u.get('name')} ({'Premium' if nx.premium else 'free account'}, {how})")
         return 0
     if cmd == "games":
         for g in games.detect():
