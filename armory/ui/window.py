@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGrap
                              QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
                              QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
-from .. import VERSION, config, games, install, layout, net, nexus, thunderstore, updates
+from .. import VERSION, config, games, install, layout, mo2, net, nexus, saves, thunderstore, tools, updates
 from ..config import DATA, HOME
 from ..fomod import Fomod
 from ..store import DeployError, Store, resolve_case, staged_files
@@ -1255,7 +1255,13 @@ class Window(QMainWindow):
     def profile_picked(self):
         name = self.profile_box.currentText()
         if name and name != self.store.active:
+            old = self.store.active
             self.store.switch_profile(name)
+            if saves.per_profile(self.game):
+                try:
+                    saves.swap(self.game, old, name)
+                except OSError as e:
+                    QMessageBox.warning(self, "Saves", f"Couldn't swap the saves: {e}")
             self.say(f"Using the {name} profile")
             self.changed()
 
@@ -1305,12 +1311,17 @@ class Window(QMainWindow):
             self.say("Putting the mods in first...")
             return
         try:
+            tool = next((t for t in tools.tools(g) if t["name"] == tools.play_with(g)), None)
+            if tool:
+                tools.run(g, tool)
+                self.say(f"Starting {g.name} with {tool['name']}...")
+                return
             if g.launch:
-                subprocess.Popen(g.launch, shell=True, cwd=g.path, start_new_session=True,
+                subprocess.Popen(g.launch, shell=True, cwd=g.path, start_new_session=True, env=config.clean_env(),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
                 subprocess.Popen(["xdg-open", f"steam://rungameid/{g.appid}"], start_new_session=True,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                 env=config.clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.say(f"Starting {g.name}...")
         except OSError as e:
             QMessageBox.warning(self, "Couldn't start it", str(e))
@@ -1336,6 +1347,45 @@ class Window(QMainWindow):
         m.addAction("Take every mod out of the game", self.purge)
         if g.adopt:
             m.addAction("Bring in mods already in the game", self.adopt_now)
+        # saves
+        sm = m.addMenu("Saves")
+        found = saves.folders(g)
+        sm.addAction("Back up the saves now", self.backup_saves).setEnabled(bool(found))
+        sm.addAction("Restore a backup...", self.restore_saves).setEnabled(bool(saves.backups(g)))
+        if found:
+            sm.addAction("Open the save folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(found[0][1])))
+        sm.addAction("Choose the save folder...", self.choose_save_folder)
+        per = sm.addAction("Separate saves for each profile")
+        per.setCheckable(True)
+        per.setChecked(saves.per_profile(g))
+        per.setEnabled(bool(found))
+        per.toggled.connect(lambda on: (saves.set_per_profile(g, on),
+                                        self.say("Each profile keeps its own saves now" if on else
+                                                 "All profiles share the saves")))
+        # tools
+        tm = m.addMenu("Tools")
+        current = tools.play_with(g)
+        for t in tools.tools(g):
+            tm.addAction(f"Run {t['name']}", lambda t=t: self.run_tool(t))
+        if tools.tools(g):
+            tm.addSeparator()
+            pw = tm.addMenu("Play starts the game with")
+            a = pw.addAction("Steam" if g.appid else "Its launch command")
+            a.setCheckable(True)
+            a.setChecked(not current)
+            a.triggered.connect(lambda: (tools.set_play_with(g, ""), self.say("Play starts the game normally")))
+            for t in tools.tools(g):
+                a = pw.addAction(t["name"])
+                a.setCheckable(True)
+                a.setChecked(current == t["name"])
+                a.triggered.connect(lambda _=False, t=t: (tools.set_play_with(g, t["name"]),
+                                                           self.say(f"Play starts {t['name']}")))
+            rm = tm.addMenu("Remove a tool")
+            for t in tools.tools(g):
+                rm.addAction(t["name"], lambda t=t: self.remove_tool(t))
+        tm.addAction("Add a tool...", self.add_tool)
+        if g.layout.get("data") or g.plugins:
+            m.addAction("Import from Mod Organizer 2...", self.import_mo2)
         if g.thunderstore:
             m.addSeparator()
             m.addAction("Import an r2modman / Gale profile...", self.import_ts_profile)
@@ -1521,6 +1571,90 @@ class Window(QMainWindow):
                 webbrowser.open(r["url"])
             return
         self.nexus_install(g, r["mod_id"], {"name": r.get("name")})
+
+    # ---- saves ----
+    def backup_saves(self):
+        g = self.game
+        tasks.run(lambda: saves.backup(g), lambda p: self.say(f"Saves backed up ({os.path.basename(p)})" if p else
+                                                             "No saves found to back up"),
+                  lambda msg: QMessageBox.warning(self, "Saves", msg))
+
+    def restore_saves(self):
+        g = self.game
+        items = list(reversed(saves.backups(g)))
+        if not items:
+            return
+        names = [os.path.basename(p)[:-4].replace("_", "  ") for p in items]
+        pick, ok = QInputDialog.getItem(self, "Restore saves", "Put these saves back (the current ones are backed "
+                                        "up first):", names, 0, False)
+        if not ok:
+            return
+        path = items[names.index(pick)]
+        tasks.run(lambda: saves.restore(g, path), lambda _: self.say("Saves restored"),
+                  lambda msg: QMessageBox.warning(self, "Saves", msg))
+
+    def choose_save_folder(self):
+        g = self.game
+        start = (saves.folders(g) or [(None, g.prefix_user or HOME)])[0][1]
+        d = QFileDialog.getExistingDirectory(self, f"{g.name}'s save folder", start if os.path.isdir(start) else HOME)
+        if d:
+            saves.set_folder(g, d)
+            self.say(f"Saves for {g.name}: {d.replace(HOME, '~')}")
+
+    # ---- tools ----
+    def add_tool(self):
+        g = self.game
+        exe, _ = QFileDialog.getOpenFileName(self, "A tool to run for " + g.name, g.path or HOME,
+                                             "Programs (*.exe *.bat *.sh *.AppImage);;All files (*)")
+        if not exe:
+            return
+        name, ok = QInputDialog.getText(self, "Tool", "Name:", text=os.path.splitext(os.path.basename(exe))[0])
+        if not ok or not name.strip():
+            return
+        args, ok = QInputDialog.getText(self, "Tool", "Arguments (optional):")
+        items = [t for t in tools.tools(g) if t["name"] != name.strip()]
+        items.append({"name": name.strip(), "exe": exe, "args": args.strip() if ok else ""})
+        tools.save_tools(g, items)
+        self.say(f"Added {name.strip()}: ⋯ → Tools runs it")
+
+    def remove_tool(self, t):
+        g = self.game
+        tools.save_tools(g, [x for x in tools.tools(g) if x["name"] != t["name"]])
+        if tools.play_with(g) == t["name"]:
+            tools.set_play_with(g, "")
+
+    def run_tool(self, t):
+        g = self.game
+        # the tool sees the mods that are on
+        self.deploy_timer.stop()
+
+        def go(_=None):
+            try:
+                tools.run(g, t)
+                self.say(f"Started {t['name']}")
+            except OSError as e:
+                QMessageBox.warning(self, "Couldn't start it", str(e))
+
+        tasks.run(self.store.deploy, go, lambda msg: QMessageBox.warning(self, "Couldn't deploy", msg))
+
+    # ---- Mod Organizer 2 ----
+    def import_mo2(self):
+        st = self.store
+        d = QFileDialog.getExistingDirectory(self, "Mod Organizer 2 instance (the folder with mods and profiles)", HOME)
+        if not d:
+            return
+        if not mo2.is_instance(d):
+            QMessageBox.warning(self, "Not an MO2 instance", "That folder has no mods and profiles folders.")
+            return
+        self.say("Importing from Mod Organizer 2...")
+
+        def done(res):
+            self.fill_profiles()
+            self.changed()
+            QMessageBox.information(self, "Imported", f"{res['mods']} mods, and the profiles: "
+                                    f"{', '.join(res['profiles']) or 'none'}. The last one is in use now.")
+
+        tasks.run(lambda: mo2.import_instance(st, d), done, lambda msg: QMessageBox.warning(self, "MO2", msg))
 
     # ---- r2modman / Gale profiles ----
     def import_ts_profile(self):

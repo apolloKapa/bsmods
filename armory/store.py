@@ -126,7 +126,7 @@ class Store:
                 return mid
         return None
 
-    def add(self, name, files, meta, replace=None, enable=True, move=False):
+    def add(self, name, files, meta, replace=None, enable=True, move=False, link=False):
         """stage a mod: files is [(abs source, rel)]. Replacing keeps its place, profiles and marks"""
         with self.lock:
             mid = replace if replace in self.mods else self.new_id(name)
@@ -138,6 +138,12 @@ class Store:
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 if move:
                     shutil.move(src, target)
+                elif link:
+                    # another manager's files: shared hard links when possible, copies otherwise
+                    try:
+                        os.link(src, target)
+                    except OSError:
+                        shutil.copy2(src, target, follow_symlinks=True)
                 else:
                     shutil.copy2(src, target, follow_symlinks=True)
             old = self.mods.get(mid, {})

@@ -84,9 +84,20 @@ class Listener(QObject):
 
 
 def main():
+    if getattr(sys, "frozen", False):
+        # the bundle's library path is only for Armory itself (the loader already read it): the
+        # browser, Steam and tools Armory starts get yours back
+        if "LD_LIBRARY_PATH_ORIG" in os.environ:
+            os.environ["LD_LIBRARY_PATH"] = os.environ.pop("LD_LIBRARY_PATH_ORIG")
+        else:
+            os.environ.pop("LD_LIBRARY_PATH", None)
     if shutil.which("bsdtar") is None and shutil.which("7z") is None:
         print("armory: install bsdtar (libarchive) or 7-Zip to unpack mods", file=sys.stderr)
     args = sys.argv[1:]
+    if args and args[0] in __import__("armory.cli", fromlist=["COMMANDS"]).COMMANDS:
+        from . import cli
+        cli.run()
+        return
     if send_to_running(args or ["--show"]):
         return
     app = QApplication(sys.argv[:1])

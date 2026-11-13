@@ -95,3 +95,17 @@ def short_count(n):
     if n >= 1000:
         return f"{n / 1000:.1f}k"
     return str(n)
+
+
+def clean_env(env=None):
+    """the environment for programs Armory starts: without the AppImage's own library path"""
+    import sys
+    env = dict(os.environ if env is None else env)
+    if "LD_LIBRARY_PATH_ORIG" in env:
+        env["LD_LIBRARY_PATH"] = env.pop("LD_LIBRARY_PATH_ORIG")
+    elif getattr(sys, "frozen", False):
+        env.pop("LD_LIBRARY_PATH", None)
+    for k in ("QT_PLUGIN_PATH", "QML2_IMPORT_PATH", "PYTHONHOME", "PYTHONPATH"):
+        if getattr(sys, "frozen", False):
+            env.pop(k, None)
+    return env
