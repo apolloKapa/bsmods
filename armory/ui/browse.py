@@ -14,19 +14,19 @@ PAGE = 30
 
 
 class ResultTile(QFrame):
-    W = 236
+    W = 230
 
-    def __init__(self, page, item):
+    def __init__(self, page, item, width=None):
         super().__init__()
         self.setObjectName("tile")
+        self.W = width or self.W
         self.setFixedWidth(self.W)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(6)
         pic = label("")
         w = self.W - 20
-        tasks.set_picture(pic, item["picture"], w, w * 9 // 16 if page.source == "nexus" else w * 9 // 16,
-                          item["name"])
+        tasks.set_picture(pic, item["picture"], w, w * 9 // 16, item["name"], 9)
         lay.addWidget(pic)
         name = label("")
         name.setStyleSheet("font-size: 14px; font-weight: 700;")
@@ -250,9 +250,13 @@ class BrowsePage(QWidget):
     def columns(self):
         return max(1, (self.width() - 16 + 10) // (ResultTile.W + 10))
 
+    def tile_width(self):
+        cols = self.columns()
+        return max(ResultTile.W, (self.width() - 16 - 10 * (cols - 1)) // cols)
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.results and self.columns() != self.cols:
+        if self.results and (self.columns() != self.cols or abs(self.tile_width() - getattr(self, "tw", 0)) > 6):
             QTimer.singleShot(0, self.show_results)
 
     def show_results(self):
@@ -264,6 +268,7 @@ class BrowsePage(QWidget):
             return
         old = self.scroll.verticalScrollBar().value()
         self.cols = self.columns()
+        tw = self.tw = self.tile_width()
         box = QWidget()
         box.setObjectName("holder")
         box.setStyleSheet("#holder { background: transparent; }")
@@ -272,7 +277,7 @@ class BrowsePage(QWidget):
         grid = QGridLayout()
         grid.setSpacing(10)
         for i, item in enumerate(self.results):
-            grid.addWidget(ResultTile(self, item), i // self.cols, i % self.cols,
+            grid.addWidget(ResultTile(self, item, tw), i // self.cols, i % self.cols,
                            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         grid.setColumnStretch(self.cols, 1)
         outer.addLayout(grid)

@@ -8,8 +8,9 @@ import webbrowser
 
 from PyQt6.QtCore import QRectF, Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap
-from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QInputDialog, QMainWindow,
-                             QMenu, QMessageBox, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QComboBox, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
+                             QInputDialog, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea,
+                             QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from .. import VERSION, config, games, install, layout, net, nexus, thunderstore
 from ..config import DATA, HOME
@@ -20,7 +21,8 @@ from .browse import BrowsePage
 from .dialogs import AddGameDialog, FomodWizard, ModDetailsDialog, NexusFilesDialog, SettingsDialog
 from .downloads import Downloads, DownloadsPage
 from .mods import ModsPage, PluginsPage
-from .theme import ACCENT, ICON, Segments, button, label, menu_button, placeholder, restyle, rounded
+from .theme import (ACCENT, BG, ICON, Tabs, Toast, blurred, button, label, menu_button, placeholder, restyle,
+                    rounded)
 
 PROXY_DLLS = {"winhttp.dll": "BepInEx", "version.dll": "MelonLoader", "dinput8.dll": "the script loader",
               "dxgi.dll": "the injector", "d3d11.dll": "the injector", "winmm.dll": "the loader",
@@ -28,12 +30,46 @@ PROXY_DLLS = {"winhttp.dll": "BepInEx", "version.dll": "MelonLoader", "dinput8.d
 OLD_BSMODS = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local/share"), "bsmods")
 
 
+class Ambient(QWidget):
+    """the main area: the game's art, blurred and dark, glowing behind the top of the page"""
+    def __init__(self):
+        super().__init__()
+        self.src = QPixmap()
+        self.cache = QPixmap()
+
+    def set_image(self, path):
+        self.src = QPixmap(path) if path else QPixmap()
+        self.cache = QPixmap()
+        self.update()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.cache = QPixmap()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(BG))
+        if self.src.isNull():
+            return
+        h = min(self.height(), 520)
+        if self.cache.isNull() or self.cache.width() < self.width():
+            self.cache = blurred(self.src, self.width(), h)
+        p.setOpacity(0.42)
+        p.drawPixmap(0, 0, self.cache, (self.cache.width() - self.width()) // 2, 0, self.width(), h)
+        p.setOpacity(1)
+        fade = QLinearGradient(0, 0, 0, h)
+        fade.setColorAt(0, QColor(13, 13, 17, 90))
+        fade.setColorAt(0.55, QColor(13, 13, 17, 200))
+        fade.setColorAt(1, QColor(13, 13, 17, 255))
+        p.fillRect(0, 0, self.width(), h, fade)
+
+
 class Hero(QWidget):
-    """the game's banner from Steam, darkened, behind its name and the Play button"""
+    """the game's banner from Steam behind its logo (or name) and the Play button"""
     def __init__(self):
         super().__init__()
         self.pix = QPixmap()
-        self.setMinimumHeight(150)
+        self.setFixedHeight(230)
 
     def set_image(self, path):
         self.pix = QPixmap(path) if path else QPixmap()
@@ -44,7 +80,7 @@ class Hero(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect())
         path = QPainterPath()
-        path.addRoundedRect(r, 16, 16)
+        path.addRoundedRect(r, 18, 18)
         p.setClipPath(path)
         if not self.pix.isNull():
             s = self.pix.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
@@ -52,18 +88,22 @@ class Hero(QWidget):
             p.drawPixmap((self.width() - s.width()) // 2, (self.height() - s.height()) // 3, s)
         else:
             g = QLinearGradient(0, 0, self.width(), self.height())
-            g.setColorAt(0, QColor("#2a2418"))
-            g.setColorAt(1, QColor("#16161c"))
+            g.setColorAt(0, QColor("#2c2519"))
+            g.setColorAt(1, QColor("#15151b"))
             p.fillRect(self.rect(), g)
-        shade = QLinearGradient(0, 0, self.width(), 0)
-        shade.setColorAt(0, QColor(12, 12, 16, 235))
-        shade.setColorAt(0.55, QColor(12, 12, 16, 170))
-        shade.setColorAt(1, QColor(12, 12, 16, 90))
-        p.fillRect(self.rect(), shade)
+        side = QLinearGradient(0, 0, self.width(), 0)
+        side.setColorAt(0, QColor(10, 10, 14, 200))
+        side.setColorAt(0.5, QColor(10, 10, 14, 90))
+        side.setColorAt(1, QColor(10, 10, 14, 20))
+        p.fillRect(self.rect(), side)
+        low = QLinearGradient(0, 0, 0, self.height())
+        low.setColorAt(0.35, QColor(10, 10, 14, 0))
+        low.setColorAt(1, QColor(10, 10, 14, 215))
+        p.fillRect(self.rect(), low)
         p.setClipping(False)
-        p.setPen(QPen(QColor(255, 255, 255, 18), 1))
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 16, 16)
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), 18, 18)
 
 
 class GameRow(QPushButton):
@@ -72,32 +112,44 @@ class GameRow(QPushButton):
         self.setObjectName("gameRow")
         self.setCheckable(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(60)
+        self.setFixedHeight(56)
+        self.game = game
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(10)
+        lay.setContentsMargins(8, 6, 10, 6)
+        lay.setSpacing(11)
         pic = label("")
         pic.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        pic.setFixedSize(30, 44)
         img = games.steam_image(game.appid, "capsule")
-        if img and not QPixmap(img).isNull():
-            pic.setFixedSize(32, 48)
-            pic.setPixmap(rounded(QPixmap(img), 32, 48, 6))
-        else:
-            pic.setFixedSize(32, 48)
-            pic.setPixmap(placeholder(game.name, 32, 48, 6))
+        pix = QPixmap(img) if img else QPixmap()
+        pic.setPixmap(rounded(pix, 30, 44, 6) if not pix.isNull() else placeholder(game.name, 30, 44, 6))
+        if not game.found:
+            fx = QGraphicsOpacityEffect(pic)
+            fx.setOpacity(0.4)
+            pic.setGraphicsEffect(fx)
         lay.addWidget(pic)
         t = QVBoxLayout()
-        t.setSpacing(1)
+        t.setSpacing(2)
+        t.addStretch(1)
         n = label(game.name)
-        n.setStyleSheet("font-weight: 600; font-size: 13px; background: transparent;")
+        n.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {'#ececf2' if game.found else '#7a7a88'};")
         n.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        s = label(("not found" if not game.found else f"{count} mod{'s' if count != 1 else ''}"), "small")
-        s.setStyleSheet("background: transparent;")
+        s = label("", "small")
         s.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.sub = s
+        self.set_count(count)
         t.addWidget(n)
         t.addWidget(s)
+        t.addStretch(1)
         lay.addLayout(t, 1)
+
+    def set_count(self, count, on=None):
+        if not self.game.found:
+            self.sub.setText("not found")
+        elif not count:
+            self.sub.setText("no mods yet")
+        else:
+            self.sub.setText(f"{count} mod{'s' if count != 1 else ''}" + (f" · {on} on" if on is not None else ""))
 
 
 class DropOverlay(QWidget):
@@ -161,15 +213,15 @@ class Window(QMainWindow):
         h.setSpacing(0)
         h.addWidget(self.build_sidebar())
 
-        main = QWidget()
-        v = QVBoxLayout(main)
-        v.setContentsMargins(20, 18, 20, 12)
-        v.setSpacing(12)
+        self.main = Ambient()
+        v = QVBoxLayout(self.main)
+        v.setContentsMargins(26, 22, 26, 14)
+        v.setSpacing(14)
         v.addWidget(self.build_hero())
         self.notice = QFrame()
         self.notice.setObjectName("notice")
         nl = QHBoxLayout(self.notice)
-        nl.setContentsMargins(14, 10, 10, 10)
+        nl.setContentsMargins(16, 11, 11, 11)
         self.notice_text = label("", wrap=True)
         self.notice_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         nl.addWidget(self.notice_text, 1)
@@ -178,16 +230,12 @@ class Window(QMainWindow):
         self.notice.hide()
         v.addWidget(self.notice)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(10)
-        self.pages_seg = Segments([("mods", "Mods"), ("plugins", "Plugins"), ("browse", "Browse"),
-                                   ("downloads", "Downloads")], self.show_page, "mods")
-        bar.addWidget(self.pages_seg)
-        bar.addStretch(1)
+        self.pages_seg = Tabs([("mods", "Mods"), ("plugins", "Plugins"), ("browse", "Browse"),
+                               ("downloads", "Downloads")], self.show_page, "mods")
         self.updates_btn = button("Check for updates", lambda: self.check_updates())
-        bar.addWidget(self.updates_btn)
-        bar.addWidget(button("+  Install from file", self.pick_files, "primary"))
-        v.addLayout(bar)
+        self.pages_seg.trail.addWidget(self.updates_btn)
+        self.pages_seg.trail.addWidget(button("+  Install from file", self.pick_files, "primary"))
+        v.addWidget(self.pages_seg)
 
         self.stack = QStackedWidget()
         self.mods_page = ModsPage(self)
@@ -208,13 +256,8 @@ class Window(QMainWindow):
         for w in (self.mods_page, self.plugins_page, self.browse_page, self.downloads_page, self.no_game):
             self.stack.addWidget(w)
         v.addWidget(self.stack, 1)
-        self.status = label("Tip: drop mod files anywhere on this window to install them", "small")
-        v.addWidget(self.status)
-        self.status_timer = QTimer(self)
-        self.status_timer.setSingleShot(True)
-        self.status_timer.timeout.connect(
-            lambda: self.status.setText("Tip: drop mod files anywhere on this window to install them"))
-        h.addWidget(main, 1)
+        h.addWidget(self.main, 1)
+        self.toast = Toast(self.main)
         self.overlay = DropOverlay(root)
 
         self.load_games(config.get("last_game"))
@@ -227,19 +270,33 @@ class Window(QMainWindow):
     def build_sidebar(self):
         side = QWidget()
         side.setObjectName("sidebar")
-        side.setFixedWidth(250)
+        side.setFixedWidth(264)
         v = QVBoxLayout(side)
-        v.setContentsMargins(14, 18, 14, 14)
+        v.setContentsMargins(14, 20, 14, 14)
         v.setSpacing(10)
         brand = QHBoxLayout()
+        brand.setContentsMargins(6, 0, 0, 0)
+        brand.setSpacing(10)
         icon = label("")
-        icon.setPixmap(QIcon(ICON).pixmap(34, 34))
+        icon.setPixmap(QIcon(ICON).pixmap(30, 30))
         brand.addWidget(icon)
         brand.addWidget(label("ARMORY", "brand"))
         brand.addStretch(1)
         v.addLayout(brand)
-        v.addSpacing(6)
-        v.addWidget(label("GAMES", "section"))
+        v.addSpacing(10)
+        self.game_search = QLineEdit()
+        self.game_search.setPlaceholderText("Search games")
+        self.game_search.setClearButtonEnabled(True)
+        self.game_search.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.game_search.textChanged.connect(self.filter_games)
+        v.addWidget(self.game_search)
+        head = QHBoxLayout()
+        head.setContentsMargins(6, 6, 4, 0)
+        head.addWidget(label("GAMES", "section"))
+        head.addStretch(1)
+        self.games_count = label("", "count")
+        head.addWidget(self.games_count)
+        v.addLayout(head)
         self.game_scroll = QScrollArea()
         self.game_scroll.setWidgetResizable(True)
         self.game_scroll.viewport().setObjectName("viewport")
@@ -248,86 +305,119 @@ class Window(QMainWindow):
         self.game_holder.setObjectName("holder")
         self.game_holder.setStyleSheet("#holder { background: transparent; }")
         self.game_list = QVBoxLayout(self.game_holder)
-        self.game_list.setContentsMargins(0, 0, 0, 0)
-        self.game_list.setSpacing(4)
+        self.game_list.setContentsMargins(0, 0, 4, 0)
+        self.game_list.setSpacing(2)
         self.game_scroll.setWidget(self.game_holder)
         v.addWidget(self.game_scroll, 1)
-        v.addWidget(button("+  Add game", self.add_game))
-        v.addSpacing(6)
+        v.addWidget(button("+  Add game", self.add_game, "ghost"))
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet("background: rgba(255,255,255,0.06);")
+        v.addSpacing(4)
+        v.addWidget(line)
+        v.addSpacing(2)
+        foot = QHBoxLayout()
+        foot.setSpacing(4)
         self.account = QPushButton()
         self.account.setObjectName("gameRow")
         self.account.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.account.setFixedHeight(58)
+        self.account.setFixedHeight(52)
+        self.account.setToolTip("Nexus Mods account")
         self.account.clicked.connect(lambda: self.settings("nexus"))
         al = QHBoxLayout(self.account)
-        al.setContentsMargins(8, 6, 8, 6)
+        al.setContentsMargins(6, 6, 6, 6)
+        al.setSpacing(10)
         self.avatar = label("")
         self.avatar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         al.addWidget(self.avatar)
         at = QVBoxLayout()
         at.setSpacing(1)
         self.acc_name = label("Nexus Mods")
-        self.acc_name.setStyleSheet("font-weight: 600; background: transparent;")
+        self.acc_name.setStyleSheet("font-weight: 600;")
         self.acc_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.acc_sub = label("Log in", "small")
-        self.acc_sub.setStyleSheet("background: transparent;")
         self.acc_sub.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         at.addWidget(self.acc_name)
         at.addWidget(self.acc_sub)
         al.addLayout(at, 1)
-        v.addWidget(self.account)
-        row = QHBoxLayout()
-        row.addWidget(button("Settings", lambda: self.settings("nexus")), 1)
-        about = label(f"v{VERSION}", "small")
-        row.addWidget(about)
-        v.addLayout(row)
+        foot.addWidget(self.account, 1)
+        gear = QToolButton()
+        gear.setText("⚙")
+        gear.setToolTip(f"Settings  ·  Armory v{VERSION}")
+        gear.setCursor(Qt.CursorShape.PointingHandCursor)
+        gear.setStyleSheet("font-size: 18px; padding: 8px 10px;")
+        gear.clicked.connect(lambda: self.settings("nexus"))
+        foot.addWidget(gear)
+        v.addLayout(foot)
         return side
 
     def build_hero(self):
         self.hero = Hero()
         lay = QHBoxLayout(self.hero)
-        lay.setContentsMargins(24, 18, 20, 18)
-        lay.setSpacing(14)
+        lay.setContentsMargins(30, 22, 24, 22)
+        lay.setSpacing(16)
         t = QVBoxLayout()
-        t.setSpacing(6)
+        t.setSpacing(8)
         t.addStretch(1)
+        self.logo = label("")
+        self.logo.hide()
+        t.addWidget(self.logo, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
         self.title = label("", "title")
-        self.title.setStyleSheet("font-size: 26px; font-weight: 800; background: transparent;")
+        self.title.setStyleSheet("font-size: 30px; font-weight: 800;")
         t.addWidget(self.title)
-        self.subtitle = label("", "muted")
-        self.subtitle.setStyleSheet("background: transparent; color: #b4b4c0;")
-        t.addWidget(self.subtitle)
         chips = QHBoxLayout()
         chips.setSpacing(8)
+        self.count_chip = label("", "chipGlass")
+        chips.addWidget(self.count_chip)
         self.deploy_chip = label("", "chipOk")
         chips.addWidget(self.deploy_chip)
-        chips.addSpacing(6)
-        chips.addWidget(label("Profile", "small"))
+        self.subtitle = label("", "small")
+        self.subtitle.setStyleSheet("color: #a5a5b2;")
+        chips.addSpacing(4)
+        chips.addWidget(self.subtitle)
+        chips.addStretch(1)
+        t.addLayout(chips)
+        lay.addLayout(t, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(10)
+        right.addStretch(1)
+        prof = QHBoxLayout()
+        prof.setSpacing(6)
+        prof.addStretch(1)
+        prof.addWidget(label("PROFILE", "section"))
         self.profile_box = QComboBox()
-        self.profile_box.setMinimumWidth(150)
+        self.profile_box.setObjectName("glass")
+        self.profile_box.setMinimumWidth(160)
+        self.profile_box.setToolTip("Profiles: each keeps its own mods on/off, order and plugins")
         self.profile_box.activated.connect(self.profile_picked)
-        chips.addWidget(self.profile_box)
+        prof.addWidget(self.profile_box)
         pm = QMenu(self)
         pm.addAction("New profile...", lambda: self.new_profile(True))
         pm.addAction("New empty profile...", lambda: self.new_profile(False))
         pm.addAction("Rename this profile...", self.rename_profile)
         pm.addAction("Delete this profile", self.delete_profile)
-        chips.addWidget(menu_button(pm, "⋯", "Profiles: each keeps its own mods on/off and order"))
-        chips.addStretch(1)
-        t.addLayout(chips)
-        lay.addLayout(t, 1)
-        right = QVBoxLayout()
-        right.addStretch(1)
+        prof.addWidget(menu_button(pm, "⋯", "Profiles"))
+        right.addLayout(prof)
         prow = QHBoxLayout()
-        self.play_btn = button("▶  Play", self.play, "play")
+        prow.setSpacing(8)
+        prow.addStretch(1)
+        self.play_btn = button("▶   PLAY", self.play, "play")
         prow.addWidget(self.play_btn)
         gm = QMenu(self)
         self.game_menu = gm
         gm.aboutToShow.connect(self.fill_game_menu)
-        prow.addWidget(menu_button(gm, "⋯", "Game"))
+        more = menu_button(gm, "⋯", "Game")
+        more.setObjectName("glass")
+        prow.addWidget(more)
         right.addLayout(prow)
         lay.addLayout(right)
         return self.hero
+
+    def filter_games(self):
+        q = self.game_search.text().strip().lower()
+        for row in self.rows.values():
+            row.setVisible(not q or q in row.game.name.lower())
 
     # ---- games ----
     def load_games(self, select=None):
@@ -346,13 +436,18 @@ class Window(QMainWindow):
             self.rows[g.id] = row
             self.game_list.addWidget(row)
         self.game_list.addStretch(1)
+        self.games_count.setText(str(len(self.games)))
+        self.filter_games()
         ids = [g.id for g in self.games]
         if not ids:
             self.game = self.store = None
             self.stack.setCurrentWidget(self.no_game)
             self.title.setText("Armory")
+            self.title.show()
+            self.logo.hide()
             self.subtitle.setText("A mod manager for your games")
             self.hero.set_image(None)
+            self.main.set_image(None)
             return
         self.select_game(select if select in ids else (self.game.id if self.game and self.game.id in ids else ids[0]))
 
@@ -372,8 +467,22 @@ class Window(QMainWindow):
         for k, r in self.rows.items():
             r.setChecked(k == gid)
         config.save_conf(last_game=gid)
-        self.hero.set_image(games.steam_image(g.appid, "hero") or games.steam_image(g.appid, "header"))
+        art = games.steam_image(g.appid, "hero") or games.steam_image(g.appid, "header")
+        self.hero.set_image(art)
+        self.main.set_image(art or games.steam_image(g.appid, "capsule"))
         self.title.setText(g.name)
+        logo = games.steam_image(g.appid, "logo")
+        pix = QPixmap(logo) if logo else QPixmap()
+        if not pix.isNull():
+            pix = pix.scaled(340, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            self.logo.setPixmap(pix)
+            self.logo.setFixedSize(pix.size())
+            self.logo.setToolTip(g.name)
+            self.logo.show()
+            self.title.hide()
+        else:
+            self.logo.hide()
+            self.title.show()
         self.pages_seg.show_key("plugins", bool(g.plugins))
         self.pages_seg.show_key("browse", bool(g.nexus or g.thunderstore))
         if self.page == "plugins" and not g.plugins or self.page == "browse" and not (g.nexus or g.thunderstore):
@@ -422,24 +531,22 @@ class Window(QMainWindow):
             return
         mods = st.ordered()
         on = sum(1 for m in mods if m["enabled"])
-        bits = [f"{len(mods)} mod{'s' if len(mods) != 1 else ''}, {on} on"]
-        if g.found:
-            bits.append(g.path.replace(HOME, "~"))
-        else:
-            bits.append("game folder not found")
-        self.subtitle.setText("  ·  ".join(bits))
+        self.count_chip.setText(f"{len(mods)} mod{'s' if len(mods) != 1 else ''}  ·  {on} on")
+        path = g.path.replace(HOME, "~") if g.found else "game folder not found"
+        self.subtitle.setText(self.subtitle.fontMetrics().elidedText(path, Qt.TextElideMode.ElideMiddle, 340))
+        self.subtitle.setToolTip(g.path or "")
         if g.id in self.rows:
-            self.rows[g.id].sub.setText("not found" if not g.found else f"{len(mods)} mod{'s' if len(mods) != 1 else ''}")
+            self.rows[g.id].set_count(len(mods), on)
         self.play_btn.setEnabled(g.found and bool(g.appid or g.launch))
         self.play_btn.setToolTip("Starts the game through Steam" if g.appid and not g.launch else g.launch)
         if self.deploying:
-            self.deploy_chip.setText("Putting mods in the game...")
+            self.deploy_chip.setText("●  Updating game files...")
             restyle(self.deploy_chip, "chipBusy")
         elif not g.found:
-            self.deploy_chip.setText("Game not found")
+            self.deploy_chip.setText("●  Game not found")
             restyle(self.deploy_chip, "chipBad")
         else:
-            self.deploy_chip.setText("Ready")
+            self.deploy_chip.setText("●  Ready")
             restyle(self.deploy_chip, "chipOk")
             self.deploy_chip.setToolTip(f"{st.deployed_count()} mod files are in the game")
 
@@ -464,8 +571,7 @@ class Window(QMainWindow):
             self.plugins_page.refresh()
 
     def say(self, text):
-        self.status.setText(text)
-        self.status_timer.start(7000)
+        self.toast.say(text)
 
     def changed(self):
         """the mods changed: show it and put the game in line"""
@@ -1229,6 +1335,8 @@ class Window(QMainWindow):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self.overlay.setGeometry(self.centralWidget().rect())
+        if self.toast.isVisible():
+            self.toast.place()
 
     def closeEvent(self, e):
         config.save_conf(window_size=[self.width(), self.height()])

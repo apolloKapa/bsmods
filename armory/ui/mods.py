@@ -35,19 +35,33 @@ def source_badge(m):
 class ModCard(QFrame):
     def __init__(self, page, m, conflicts):
         super().__init__()
-        self.setObjectName("card")
+        self.setObjectName("card" if m["enabled"] else "cardOff")
         self.page, self.m = page, m
         store = page.store
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 10, 12, 10)
+        lay.setContentsMargins(8, 9, 12, 9)
         lay.setSpacing(12)
-        grip = label("⋮⋮", "muted")
+        side = QVBoxLayout()
+        side.setContentsMargins(0, 0, 0, 0)
+        side.setSpacing(2)
+        grip = label("⠿", "muted")
         grip.setToolTip("Drag to change the order: mods lower in the list win the files they share")
-        grip.setStyleSheet("font-size: 14px; color: #55555f;")
+        grip.setStyleSheet("font-size: 16px; color: #4a4a55;")
+        grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         grip.setCursor(Qt.CursorShape.OpenHandCursor)
-        lay.addWidget(grip)
+        side.addStretch(1)
+        side.addWidget(grip)
+        prio = label(f"{m['priority'] + 1:02d}", "prio")
+        prio.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prio.setToolTip("Place in the load order: higher numbers win shared files")
+        side.addWidget(prio)
+        side.addStretch(1)
+        holder = QWidget()
+        holder.setFixedWidth(24)
+        holder.setLayout(side)
+        lay.addWidget(holder)
         thumb = label("")
-        tasks.set_picture(thumb, picture_of(store, m), 112, 63, m.get("name", ""))
+        tasks.set_picture(thumb, picture_of(store, m), 120, 68, m.get("name", ""), 9)
         if not m["enabled"]:
             eff = QGraphicsOpacityEffect(thumb)
             eff.setOpacity(0.4)
@@ -59,7 +73,7 @@ class ModCard(QFrame):
         top = QHBoxLayout()
         top.setSpacing(8)
         name = label(m.get("name") or m["id"])
-        name.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {'#e8e8ef' if m['enabled'] else '#7a7a88'};")
+        name.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {'#ececf2' if m['enabled'] else '#7a7a88'};")
         top.addWidget(name)
         if m.get("version"):
             top.addWidget(label("v" + str(m["version"]).lstrip("vV"), "badge"))
@@ -111,23 +125,24 @@ class ModCard(QFrame):
 class ModTile(QFrame):
     W = 220
 
-    def __init__(self, page, m):
+    def __init__(self, page, m, width=None):
         super().__init__()
-        self.setObjectName("tile")
+        self.W = width or self.W
+        self.setObjectName("tile" if m["enabled"] else "cardOff")
         self.setFixedWidth(self.W)
         store = page.store
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
         thumb = label("")
-        tasks.set_picture(thumb, picture_of(store, m), self.W - 20, (self.W - 20) * 9 // 16, m.get("name", ""))
+        tasks.set_picture(thumb, picture_of(store, m), self.W - 20, (self.W - 20) * 9 // 16, m.get("name", ""), 9)
         if not m["enabled"]:
             eff = QGraphicsOpacityEffect(thumb)
             eff.setOpacity(0.4)
             thumb.setGraphicsEffect(eff)
         lay.addWidget(thumb)
         name = label("")
-        name.setStyleSheet(f"font-size: 14px; font-weight: 700; color: {'#e8e8ef' if m['enabled'] else '#7a7a88'};")
+        name.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {'#ececf2' if m['enabled'] else '#7a7a88'};")
         name.setText(QFontMetrics(name.font()).elidedText(m.get("name", ""), Qt.TextElideMode.ElideRight, self.W - 40))
         name.setToolTip(tip(m.get("name", "") + (f"\nby {m['author']}" if m.get("author") else "") +
                         (f"\n\n{m['summary']}" if m.get("summary") else "")))
@@ -203,7 +218,7 @@ class OrderList(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self.setSpacing(4)
+        self.setSpacing(3)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def dropEvent(self, e):
@@ -300,9 +315,14 @@ class ModsPage(QWidget):
         # the page's width: the grid's own viewport is still tiny while it's hidden
         return max(1, (self.width() - 16 + 10) // (ModTile.W + 10))
 
+    def tile_width(self):
+        cols = self.columns()
+        return max(ModTile.W, (self.width() - 16 - 10 * (cols - 1)) // cols)
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        if self.view == "grid" and self.store and self.columns() != self.grid_cols:
+        if self.view == "grid" and self.store and (self.columns() != self.grid_cols or
+                                                    abs(self.tile_width() - getattr(self, "grid_w", 0)) > 6):
             QTimer.singleShot(0, self.refresh)
 
     def visible(self):
@@ -356,6 +376,7 @@ class ModsPage(QWidget):
             return
         if self.view == "grid":
             self.grid_cols = self.columns()
+            self.grid_w = self.tile_width()
             box = QWidget()
             box.setObjectName("holder")
             box.setStyleSheet("#holder { background: transparent; }")
@@ -363,7 +384,7 @@ class ModsPage(QWidget):
             grid.setContentsMargins(0, 0, 0, 0)
             grid.setSpacing(10)
             for i, m in enumerate(shown):
-                grid.addWidget(ModTile(self, m), i // self.grid_cols, i % self.grid_cols,
+                grid.addWidget(ModTile(self, m, self.grid_w), i // self.grid_cols, i % self.grid_cols,
                                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
             grid.setColumnStretch(self.grid_cols, 1)
             grid.setRowStretch(len(shown) // self.grid_cols + 1, 1)

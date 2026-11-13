@@ -35,6 +35,7 @@ PY
 "$VENV/bin/pyinstaller" --noconfirm --clean --onedir --name armory \
     --distpath "$BUILD/dist" --workpath "$BUILD/work" --specpath "$BUILD" \
     --add-data "$PWD/armory/armory.svg:armory" \
+    --add-data "$PWD/armory/fonts:armory/fonts" \
     --exclude-module tkinter \
     --exclude-module PyQt6.QtQml --exclude-module PyQt6.QtQuick --exclude-module PyQt6.QtPdf \
     --exclude-module PyQt6.QtMultimedia --exclude-module PyQt6.QtWebEngineCore \
