@@ -43,6 +43,7 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
     """redirects never carry your Nexus key (or a token) to another site, and never go from https
     to plain http (urllib copies every header across redirects by itself)"""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        newurl = quote_url(newurl)
         old, new = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
         if old.scheme == "https" and new.scheme != "https":
             raise urllib.error.HTTPError(newurl, code, "Refused a redirect from https to http", headers, fp)
@@ -94,7 +95,7 @@ def read_capped(r, limit):
 
 
 def request(url, data=None, headers=None, method=None, timeout=30, limit=128 << 20):
-    check_url(url)
+    url = check_url(url)
     h = {"User-Agent": UA, "Accept-Encoding": "gzip"}
     h.update(headers or {})
     body = None
@@ -134,13 +135,24 @@ def get_json(url, **kw):
 
 
 def check_url(url):
+    """the address, made safe to send: Nexus's file links keep the file's name as it is (spaces and
+    all), which urllib refuses, so anything that isn't allowed in a URL is percent-encoded"""
     if not url.lower().startswith("https://") and not url.lower().startswith("http://"):
         raise NetError(f"Not a web address: {url[:80]}")
+    return quote_url(url)
+
+
+def quote_url(url):
+    p = urllib.parse.urlsplit(url.strip())
+    keep = "/%:@!$&'()*+,;=~-._"
+    return urllib.parse.urlunsplit((p.scheme, p.netloc, urllib.parse.quote(p.path, safe=keep),
+                                    urllib.parse.quote(p.query, safe=keep + "?"),
+                                    urllib.parse.quote(p.fragment, safe=keep + "?")))
 
 
 def download(url, dest, progress=None, cancelled=lambda: False, headers=None):
     """download to dest (through dest.part); progress(done, total) every chunk"""
-    check_url(url)
+    url = check_url(url)
     h = {"User-Agent": UA}
     h.update(headers or {})
     part = dest + ".part"
