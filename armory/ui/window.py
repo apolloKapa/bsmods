@@ -21,7 +21,7 @@ from .browse import BrowsePage
 from .dialogs import (AddGameDialog, CollectionDialog, FomodWizard, ImportProfileDialog, ModDetailsDialog,
                       NexusFilesDialog, SettingsDialog)
 from .downloads import Downloads, DownloadsPage
-from .mods import ModsPage, PluginsPage
+from .mods import ModsPage, PluginsPage, missing_requirements, requirement_line
 from . import theme as T
 from .theme import ICON, Tabs, Toast, blurred, button, label, menu_button, placeholder, restyle, rounded
 
@@ -982,7 +982,7 @@ class Window(QMainWindow):
             else:
                 self.deploy_store(st)
             if (m.get("source") or {}).get("type") == "nexus":
-                self.fetch_requirements(st, [mid])
+                self.fetch_requirements(st, [mid], announce=True)
             if (m.get("source") or {}).get("type") == "local" and self.nexus.logged_in and g.nexus and \
                     os.path.isfile(src):
                 self.link_to_nexus(st, mid, src)
@@ -1688,8 +1688,9 @@ class Window(QMainWindow):
         self.dl_bar.hide()
 
     # ---- Nexus requirements ----
-    def fetch_requirements(self, st, mids):
-        """what the Nexus pages of these mods say they need (kept on each mod)"""
+    def fetch_requirements(self, st, mids, announce=False):
+        """what the Nexus pages of these mods say they need (kept on each mod)
+        announce: just installed, so say right away if something it needs is missing or off"""
         domain = st.game.nexus
         by_id = {}
         for mid in mids:
@@ -1705,11 +1706,41 @@ class Window(QMainWindow):
                     st.update_meta(mid, requires=items or None)
             if st is self.store:
                 self.mods_page.refresh()
+                if announce:
+                    for mid in mids:
+                        self.announce_missing(mid)
 
         tasks.run(lambda: nexus.requirements(domain, list(by_id)), done)
 
+    def announce_missing(self, mid):
+        """after an install: what the mod needs that isn't here (or is off), with a button for all of it"""
+        if getattr(self, "collection_queue", None) or mid not in self.store.mods:
+            return  # a collection brings its own requirements
+        m = self.store.mods[mid]
+        missing = missing_requirements(self.store, m)
+        if all(r.get("external") for r in missing):
+            return  # website-only ones (a script extender, a loader) can't be seen, so they'd ask every time
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("It needs more")
+        box.setText(f"{m.get('name') or 'This mod'} needs:\n\n" +
+                    "\n".join("• " + requirement_line(r) for r in missing) +
+                    "\n\nWithout them it may not work, or the game may not start.")
+        get = box.addButton("Get them" if any(not r.get("off") for r in missing) else "Turn them on",
+                            QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is get:
+            for r in missing:
+                self.get_requirement(r)
+
     def get_requirement(self, r):
         g = self.game
+        if r.get("off"):
+            m = self.store.mods.get(r["off"]) if self.store else None
+            if m and not m.get("enabled"):
+                self.mods_page.toggle(m, True)
+            return
         if r.get("external") or not r.get("mod_id"):
             if r.get("url"):
                 webbrowser.open(r["url"])
