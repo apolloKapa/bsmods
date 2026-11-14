@@ -33,8 +33,9 @@ It started as BS Mods, a Blade & Sorcery mod manager, and now handles any game.
   same versions, its config files), and share your profile as a code or `.r2z`.
 - **Nexus Collections**: paste a collection's address (or use its "Add to collection" link) and pick
   its mods; Premium downloads them all, free accounts get each mod's Files tab opened in turn.
-- **Requirements**: mods whose Nexus page lists required mods you don't have get a "Needs" badge, and
-  ⋯ → Get fetches them.
+- **Requirements**: mods whose Nexus page lists required mods you don't have (or have switched off)
+  get a "Needs" badge, and ⋯ → Get / Turn on fixes them. Right after you install a Nexus mod, Armory
+  tells you what it still needs, with one button for all of it.
 - **Saves**: back up and restore a game's saves, or keep separate saves for each profile.
 - **Tools**: run programs (script extenders, config editors, xEdit...) inside the game's Proton
   prefix with the Proton the game uses, and let Play start the game through one of them.
